@@ -1,0 +1,88 @@
+# SMARTCARE+ .gitignore
+# Ignore files and folders not to be committed
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+
+# Virtual environments
+venv/
+.env/
+.env
+.venv/
+backend/venv/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+
+# Test and coverage
+.pytest_cache/
+htmlcov/
+
+# Logs
+*.log
+logs/
+
+# Firebase credentials and env
+firebase-credentials.json
+backend/firebase-credentials.json
+*.local
+
+# ML models (large files)
+backend/ml_models/
+*.h5
+*.pkl
+
+# ---------- Flutter ----------
+# Flutter build & tool directories
+**/build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+
+# Android / iOS build artifacts
+android/.gradle/
+android/.idea/
+android/app/*.keystore
+android/app/*.jks
+ios/Pods/
+
+# Generated plugin files
+/.flutter-plugins
+/.metadata
+
+# Assets, fonts (keep sources, ignore generated outputs)
+# (Keep assets in repo for demo; remove from .gitignore if you want to commit binaries.)
+
+# ---------- IDEs & OS ----------
+.vscode/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Misc
+*.sqlite3
+*.db
+*.env
+
+# Ignore compiled binary files
+*.so
+*.dylib
+*.dll
+
+# Secrets (if any)
+secrets.yaml
+
+# Local user files
+*.swp
+*~
+
+# End of .gitignore

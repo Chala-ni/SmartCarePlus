@@ -39,6 +39,8 @@ flutter pub get
 flutter run
 ```
 
+**Note on Deployment (University Demo):** This is a university demo—do **NOT** deploy backend or frontend services to Cloud Run or other production platforms. Run the backend and frontend locally (see Quick Start) or use Firebase emulators for database and auth during development.
+
 ## 👥 Team
 
 | Member | Service | Focus |

@@ -4,7 +4,8 @@
 > **Timeline**: 4 Sprints × 1 Week = 4 Weeks (1 Month)  
 > **Accelerator**: GenAI (GitHub Copilot Pro+) - 6x development speed  
 > **UI Theme**: Dark Mode | Futuristic | Modern Glassmorphism  
-> **Note**: Using pre-recorded videos as simulated live CCTV (university project constraint)
+> **Note**: Using pre-recorded videos as simulated live CCTV (university project constraint)  
+> **Deployment**: Local/demo only — do **NOT** deploy to Cloud Run or production environments for this project; use local servers or Firebase emulators for testing.
 
 ---
 
