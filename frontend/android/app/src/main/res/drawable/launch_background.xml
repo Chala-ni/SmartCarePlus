@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SMARTCARE+ Dark Launch Background -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Dark background matching our theme #0A0E17 -->
+    <item android:drawable="@android:color/black"/>
+    
+    <!-- Centered app icon -->
+    <item>
+        <bitmap
+            android:gravity="center"
+            android:src="@mipmap/ic_launcher"/>
+    </item>
+</layer-list>

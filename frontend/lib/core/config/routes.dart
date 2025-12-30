@@ -4,6 +4,8 @@
 
 import 'package:flutter/material.dart';
 import '../../screens/auth/login_screen.dart';
+import '../../screens/auth/register_screen.dart';
+import '../../screens/auth/splash_screen.dart';
 import '../../screens/home/dashboard_screen.dart';
 
 class AppRoutes {
@@ -37,11 +39,13 @@ class AppRoutes {
   static Route<dynamic> generateRoute(RouteSettings settings) {
     switch (settings.name) {
       case splash:
-        // TODO: Replace with actual splash screen
-        return _fadeRoute(const LoginScreen(), settings);
+        return _fadeRoute(const SplashScreen(), settings);
       
       case login:
         return _fadeRoute(const LoginScreen(), settings);
+      
+      case register:
+        return _slideRoute(const RegisterScreen(), settings);
       
       case dashboard:
         return _fadeRoute(const DashboardScreen(), settings);
@@ -72,7 +76,23 @@ class AppRoutes {
     );
   }
 
-  /// Slide transition route
+  /// Slide transition route (from right)
+  static PageRoute _slideRoute(Widget page, RouteSettings settings) {
+    return PageRouteBuilder(
+      settings: settings,
+      pageBuilder: (context, animation, secondaryAnimation) => page,
+      transitionsBuilder: (context, animation, secondaryAnimation, child) {
+        const begin = Offset(1.0, 0.0);
+        const end = Offset.zero;
+        const curve = Curves.easeInOut;
+        var tween = Tween(begin: begin, end: end).chain(CurveTween(curve: curve));
+        return SlideTransition(position: animation.drive(tween), child: child);
+      },
+      transitionDuration: const Duration(milliseconds: 300),
+    );
+  }
+
+  /// Slide transition route (legacy - for external use)
   static PageRoute slideRoute(Widget page, RouteSettings settings) {
     return PageRouteBuilder(
       settings: settings,

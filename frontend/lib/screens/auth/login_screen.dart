@@ -1,24 +1,25 @@
 /// SMARTCARE+ Login Screen
 ///
-/// Dark futuristic login with glassmorphism
+/// Dark futuristic login with glassmorphism and Firebase Auth
 
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
+import '../../providers/auth_provider.dart';
 
-class LoginScreen extends StatefulWidget {
+class LoginScreen extends ConsumerStatefulWidget {
   const LoginScreen({super.key});
 
   @override
-  State<LoginScreen> createState() => _LoginScreenState();
+  ConsumerState<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends ConsumerState<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
-  bool _isLoading = false;
 
   @override
   void dispose() {
@@ -28,13 +29,23 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _handleLogin() async {
-    setState(() => _isLoading = true);
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
     
-    // TODO: Implement Firebase Auth login
-    await Future.delayed(const Duration(seconds: 2));
+    if (email.isEmpty || password.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter email and password'),
+          backgroundColor: AppColors.neonRed,
+        ),
+      );
+      return;
+    }
     
-    if (mounted) {
-      setState(() => _isLoading = false);
+    final authNotifier = ref.read(authProvider.notifier);
+    final success = await authNotifier.signInWithEmail(email, password);
+    
+    if (success && mounted) {
       Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
     }
   }
@@ -222,31 +233,69 @@ class _LoginScreenState extends State<LoginScreen> {
               
               const SizedBox(height: 24),
               
+              // Error message
+              Consumer(
+                builder: (context, ref, _) {
+                  final authState = ref.watch(authProvider);
+                  if (authState.error != null) {
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.neonRed.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppColors.neonRed.withOpacity(0.3)),
+                        ),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.error_outline, color: AppColors.neonRed, size: 20),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                authState.error!,
+                                style: const TextStyle(color: AppColors.neonRed, fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }
+                  return const SizedBox.shrink();
+                },
+              ),
+              
               // Login button with glow
-              Container(
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: AppColors.neonCyan.withOpacity(0.4),
-                      blurRadius: 20,
-                      spreadRadius: 0,
+              Consumer(
+                builder: (context, ref, _) {
+                  final isLoading = ref.watch(authProvider).isLoading;
+                  return Container(
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.neonCyan.withOpacity(0.4),
+                          blurRadius: 20,
+                          spreadRadius: 0,
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: ElevatedButton(
-                  onPressed: _isLoading ? null : _handleLogin,
-                  child: _isLoading
-                      ? const SizedBox(
-                          height: 20,
-                          width: 20,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: AppColors.background,
-                          ),
-                        )
-                      : const Text('SIGN IN'),
-                ),
+                    child: ElevatedButton(
+                      onPressed: isLoading ? null : _handleLogin,
+                      child: isLoading
+                          ? const SizedBox(
+                              height: 20,
+                              width: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: AppColors.background,
+                              ),
+                            )
+                          : const Text('SIGN IN'),
+                    ),
+                  );
+                },
               ),
               
               const SizedBox(height: 24),
@@ -293,7 +342,7 @@ class _LoginScreenState extends State<LoginScreen> {
         ),
         TextButton(
           onPressed: () {
-            // TODO: Navigate to register
+            Navigator.pushNamed(context, AppRoutes.register);
           },
           child: const Text('Sign Up'),
         ),

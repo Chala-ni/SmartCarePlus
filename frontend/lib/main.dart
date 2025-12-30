@@ -5,11 +5,16 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'core/config/theme.dart';
 import 'core/config/routes.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Firebase
+  await Firebase.initializeApp();
   
   // Set system UI overlay style for dark theme
   SystemChrome.setSystemUIOverlayStyle(
@@ -21,7 +26,17 @@ void main() {
     ),
   );
   
-  runApp(const SmartCarePlusApp());
+  // Lock to portrait mode (better for elderly users)
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.portraitUp,
+    DeviceOrientation.portraitDown,
+  ]);
+  
+  runApp(
+    const ProviderScope(
+      child: SmartCarePlusApp(),
+    ),
+  );
 }
 
 class SmartCarePlusApp extends StatelessWidget {

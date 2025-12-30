@@ -31,7 +31,18 @@ logs/
 # Firebase credentials and env
 firebase-credentials.json
 backend/firebase-credentials.json
+backend/service-account.json
+service-account.json
+smartcare-plus-c9617-firebase-adminsdk*.json
 *.local
+
+# Google Services (Android Firebase config)
+frontend/android/app/google-services.json
+google-services.json
+
+# Local media storage (videos/images)
+backend/media/
+media/
 
 # ML models (large files)
 backend/ml_models/

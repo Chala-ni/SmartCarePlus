@@ -1,0 +1,112 @@
+// SMARTCARE+ Android App Build Configuration
+// ============================================
+// CRITICAL: Do not modify NDK/SDK versions without team discussion
+
+plugins {
+    id "com.android.application"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+    // Firebase plugins
+    id "com.google.gms.google-services"
+}
+
+def localProperties = new Properties()
+def localPropertiesFile = rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localPropertiesFile.withReader('UTF-8') { reader ->
+        localProperties.load(reader)
+    }
+}
+
+def flutterVersionCode = localProperties.getProperty('flutter.versionCode')
+if (flutterVersionCode == null) {
+    flutterVersionCode = '1'
+}
+
+def flutterVersionName = localProperties.getProperty('flutter.versionName')
+if (flutterVersionName == null) {
+    flutterVersionName = '1.0'
+}
+
+android {
+    namespace "com.smartcare.plus"
+    compileSdk 34
+    
+    // ============================================
+    // CRITICAL: Force specific NDK version
+    // Do NOT let Gradle auto-download other versions
+    // ============================================
+    ndkVersion = "27.0.12077973"
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    sourceSets {
+        main.java.srcDirs += 'src/main/kotlin'
+    }
+
+    defaultConfig {
+        applicationId "com.smartcare.plus"
+        
+        // ============================================
+        // CRITICAL: minSdk 24 required for Camera/ML plugins
+        // ============================================
+        minSdk 24
+        targetSdk 34
+        
+        versionCode flutterVersionCode.toInteger()
+        versionName flutterVersionName
+        
+        // Enable multidex for Firebase + ML dependencies
+        multiDexEnabled true
+    }
+
+    buildTypes {
+        release {
+            // Enable code shrinking for release builds
+            signingConfig signingConfigs.debug
+            minifyEnabled false
+            shrinkResources false
+        }
+        debug {
+            // Debug builds for development
+            debuggable true
+        }
+    }
+    
+    // Lint options
+    lint {
+        disable 'InvalidPackage'
+        checkReleaseBuilds false
+    }
+}
+
+flutter {
+    source '../..'
+}
+
+dependencies {
+    // Firebase BoM (Bill of Materials) for version management
+    implementation platform('com.google.firebase:firebase-bom:32.7.0')
+    
+    // Firebase dependencies (versions managed by BoM)
+    implementation 'com.google.firebase:firebase-analytics'
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'com.google.firebase:firebase-messaging'
+    
+    // CameraX for video capture (required for physio/guardian features)
+    implementation 'androidx.camera:camera-camera2:1.3.1'
+    implementation 'androidx.camera:camera-lifecycle:1.3.1'
+    implementation 'androidx.camera:camera-view:1.3.1'
+    
+    // ML Kit dependencies
+    implementation 'com.google.mlkit:pose-detection:18.0.0-beta3'
+    implementation 'com.google.mlkit:pose-detection-accurate:18.0.0-beta3'
+}

@@ -16,11 +16,14 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # Firebase
-    FIREBASE_PROJECT_ID: str = ""
-    FIREBASE_CREDENTIALS_PATH: str = "firebase-credentials.json"
+    FIREBASE_PROJECT_ID: str = "smartcare-plus-c9617"
+    FIREBASE_CREDENTIALS_PATH: str = "service-account.json"
+    
+    # Local Storage (Firebase Storage fallback)
+    LOCAL_MEDIA_PATH: str = "media"
     
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
+    CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080", "http://10.0.2.2:8000"]
     
     # WebSocket
     WS_MAX_CONNECTIONS: int = 100
