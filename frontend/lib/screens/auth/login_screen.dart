@@ -319,8 +319,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               
               // Google Sign In
               OutlinedButton.icon(
-                onPressed: () {
-                  // TODO: Google sign in
+                onPressed: () async {
+                  final authNotifier = ref.read(authProvider.notifier);
+                  final success = await authNotifier.signInWithGoogle();
+                  
+                  if (success && mounted) {
+                    Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+                  }
                 },
                 icon: const Icon(Icons.g_mobiledata, size: 28),
                 label: const Text('Continue with Google'),

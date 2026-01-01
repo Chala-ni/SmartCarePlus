@@ -6,6 +6,7 @@ library;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 /// User role enum
 enum UserRole { elderly, caregiver, guardian, admin }
@@ -95,6 +96,7 @@ class AuthState {
 class AuthNotifier extends StateNotifier<AuthState> {
   final FirebaseAuth _auth = FirebaseAuth.instance;
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final GoogleSignIn _googleSignIn = GoogleSignIn();
 
   AuthNotifier() : super(const AuthState(isLoading: true)) {
     _init();
@@ -156,6 +158,74 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  /// Sign in with Google
+  Future<bool> signInWithGoogle({UserRole defaultRole = UserRole.elderly}) async {
+    state = state.copyWith(isLoading: true, error: null);
+    
+    try {
+      // Trigger Google Sign-In flow
+      final GoogleSignInAccount? googleUser = await _googleSignIn.signIn();
+      
+      if (googleUser == null) {
+        // User cancelled the sign-in
+        state = state.copyWith(isLoading: false);
+        return false;
+      }
+      
+      // Obtain auth details from Google
+      final GoogleSignInAuthentication googleAuth = await googleUser.authentication;
+      
+      // Create Firebase credential
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      
+      // Sign in to Firebase
+      final userCredential = await _auth.signInWithCredential(credential);
+      
+      if (userCredential.user == null) {
+        throw Exception('Failed to sign in with Google');
+      }
+      
+      // Check if user profile exists in Firestore
+      final userDoc = await _firestore
+          .collection('users')
+          .doc(userCredential.user!.uid)
+          .get();
+      
+      if (!userDoc.exists) {
+        // New user - create profile in Firestore
+        await _firestore.collection('users').doc(userCredential.user!.uid).set({
+          'email': userCredential.user!.email ?? googleUser.email,
+          'name': userCredential.user!.displayName ?? googleUser.displayName ?? 'User',
+          'role': defaultRole.name,
+          'profile_image_url': userCredential.user!.photoURL ?? googleUser.photoUrl,
+          'auth_provider': 'google',
+          'created_at': DateTime.now().toIso8601String(),
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+      }
+      
+      // Load user profile
+      await _loadUserProfile(userCredential.user!);
+      
+      return true;
+    } on FirebaseAuthException catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: _getAuthErrorMessage(e.code),
+      );
+      return false;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Google sign-in failed: ${e.toString()}',
+      );
+      return false;
+    }
+  }
+
   /// Register with email and password
   Future<bool> registerWithEmail({
     required String email,
@@ -209,6 +279,10 @@ class AuthNotifier extends StateNotifier<AuthState> {
 
   /// Sign out
   Future<void> signOut() async {
+    // Sign out from Google if signed in
+    if (await _googleSignIn.isSignedIn()) {
+      await _googleSignIn.signOut();
+    }
     await _auth.signOut();
     state = const AuthState();
   }

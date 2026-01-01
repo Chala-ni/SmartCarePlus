@@ -16,6 +16,9 @@ dependencies:
   firebase_auth: ^4.16.0
   cloud_firestore: ^4.14.0
   firebase_messaging: ^14.7.9
+  
+  # Google Sign-In
+  google_sign_in: ^6.2.1
   # NOTE: firebase_storage disabled - using local storage (payment issue)
   # firebase_storage: ^11.6.0
 
