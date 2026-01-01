@@ -1,0 +1,1416 @@
+/// SMARTCARE+ Guardian Dashboard
+///
+/// Dashboard for guardians/caregivers to monitor elderly users,
+/// view alerts, and access real-time monitoring features
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../core/constants/colors.dart';
+import '../../widgets/common/glassmorphic_card.dart';
+import '../../providers/auth_provider.dart';
+
+class GuardianDashboard extends ConsumerStatefulWidget {
+  const GuardianDashboard({super.key});
+
+  @override
+  ConsumerState<GuardianDashboard> createState() => _GuardianDashboardState();
+}
+
+class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
+  int _currentIndex = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: AppColors.backgroundGradient,
+          ),
+        ),
+        child: IndexedStack(
+          index: _currentIndex,
+          children: const [
+            _GuardianHomeTab(),
+            _MonitorTab(),
+            _AlertsTab(),
+            _ElderlyListTab(),
+          ],
+        ),
+      ),
+      bottomNavigationBar: _buildBottomNav(),
+    );
+  }
+
+  Widget _buildBottomNav() {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.surface.withOpacity(0.95),
+        border: const Border(
+          top: BorderSide(color: AppColors.glassBorder),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.neonPurple.withOpacity(0.1),
+            blurRadius: 20,
+            offset: const Offset(0, -5),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildNavItem(0, Icons.dashboard_outlined, Icons.dashboard, 'Dashboard', AppColors.neonPurple),
+              _buildNavItem(1, Icons.videocam_outlined, Icons.videocam, 'Monitor', AppColors.neonCyan),
+              _buildNavItem(2, Icons.notifications_outlined, Icons.notifications, 'Alerts', AppColors.neonOrange),
+              _buildNavItem(3, Icons.people_outlined, Icons.people, 'Elderly', AppColors.neonGreen),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label, Color color) {
+    final isSelected = _currentIndex == index;
+    final hasNotification = index == 2; // Alerts tab
+    
+    return GestureDetector(
+      onTap: () => setState(() => _currentIndex = index),
+      behavior: HitTestBehavior.opaque,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? color.withOpacity(0.15) : Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: color.withOpacity(0.3),
+                    blurRadius: 12,
+                    spreadRadius: 0,
+                  ),
+                ]
+              : null,
+        ),
+        child: Stack(
+          clipBehavior: Clip.none,
+          children: [
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  isSelected ? activeIcon : icon,
+                  color: isSelected ? color : AppColors.textSecondary,
+                  size: 26,
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                    color: isSelected ? color : AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+            if (hasNotification)
+              Positioned(
+                right: -4,
+                top: -4,
+                child: Container(
+                  width: 18,
+                  height: 18,
+                  decoration: BoxDecoration(
+                    color: AppColors.neonRed,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: AppColors.neonRed.withOpacity(0.4),
+                        blurRadius: 6,
+                      ),
+                    ],
+                  ),
+                  child: const Center(
+                    child: Text(
+                      '3',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============= Guardian Home Tab =============
+
+class _GuardianHomeTab extends ConsumerWidget {
+  const _GuardianHomeTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final profile = ref.watch(userProfileProvider);
+    final userName = profile?.name ?? 'Guardian';
+
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Guardian Dashboard',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      'Hello, $userName',
+                      style: const TextStyle(
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                _buildProfileAvatar(),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Alert Summary Card
+            _buildAlertSummaryCard(),
+            
+            const SizedBox(height: 20),
+            
+            // Monitored Elderly Grid
+            const Text(
+              'Monitoring',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 12),
+            
+            Row(
+              children: [
+                Expanded(child: _buildElderlyStatusCard(
+                  name: 'Margaret',
+                  status: 'Active',
+                  activity: 'Walking',
+                  riskLevel: 'Low',
+                  color: AppColors.neonGreen,
+                )),
+                const SizedBox(width: 12),
+                Expanded(child: _buildElderlyStatusCard(
+                  name: 'Robert',
+                  status: 'Resting',
+                  activity: 'Sitting',
+                  riskLevel: 'Medium',
+                  color: AppColors.neonOrange,
+                )),
+              ],
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Recent Alerts
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Recent Alerts',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () {},
+                  child: const Text('View All', style: TextStyle(color: AppColors.neonCyan)),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            
+            _buildAlertCard(
+              type: 'Fall Detected',
+              elderlyName: 'Margaret',
+              time: '2 min ago',
+              priority: 'Critical',
+              icon: Icons.warning,
+              color: AppColors.neonRed,
+            ),
+            const SizedBox(height: 8),
+            _buildAlertCard(
+              type: 'Inactivity Warning',
+              elderlyName: 'Robert',
+              time: '15 min ago',
+              priority: 'High',
+              icon: Icons.timer_off,
+              color: AppColors.neonOrange,
+            ),
+            const SizedBox(height: 8),
+            _buildAlertCard(
+              type: 'Geofence Breach',
+              elderlyName: 'Margaret',
+              time: '1 hour ago',
+              priority: 'Medium',
+              icon: Icons.location_off,
+              color: AppColors.neonPurple,
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Quick Actions
+            const Text(
+              'Quick Actions',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.w600,
+                color: AppColors.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 12),
+            
+            Row(
+              children: [
+                Expanded(
+                  child: _buildQuickAction(
+                    icon: Icons.videocam,
+                    label: 'Live\nMonitor',
+                    color: AppColors.neonCyan,
+                    onTap: () {},
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildQuickAction(
+                    icon: Icons.map,
+                    label: 'Geofence\nSetup',
+                    color: AppColors.neonPurple,
+                    onTap: () {},
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildQuickAction(
+                    icon: Icons.history,
+                    label: 'Activity\nLog',
+                    color: AppColors.neonGreen,
+                    onTap: () {},
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildQuickAction(
+                    icon: Icons.call,
+                    label: 'Call\nElderly',
+                    color: AppColors.neonOrange,
+                    onTap: () {},
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileAvatar() {
+    return Container(
+      width: 50,
+      height: 50,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: AppColors.neonPurple, width: 2),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.neonPurple.withOpacity(0.3),
+            blurRadius: 10,
+          ),
+        ],
+      ),
+      child: const CircleAvatar(
+        backgroundColor: AppColors.surface,
+        child: Icon(Icons.person, color: AppColors.neonPurple),
+      ),
+    );
+  }
+
+  Widget _buildAlertSummaryCard() {
+    return GlassmorphicCard(
+      glowColor: AppColors.neonRed,
+      glowIntensity: 0.2,
+      padding: const EdgeInsets.all(16),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.neonRed.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.notifications_active, color: AppColors.neonRed, size: 28),
+          ),
+          const SizedBox(width: 16),
+          const Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '3 Active Alerts',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  '1 critical, 2 require attention',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: BoxDecoration(
+              color: AppColors.neonRed,
+              borderRadius: BorderRadius.circular(20),
+              boxShadow: [
+                BoxShadow(
+                  color: AppColors.neonRed.withOpacity(0.4),
+                  blurRadius: 8,
+                ),
+              ],
+            ),
+            child: const Text(
+              'View',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildElderlyStatusCard({
+    required String name,
+    required String status,
+    required String activity,
+    required String riskLevel,
+    required Color color,
+  }) {
+    return GlassmorphicCard(
+      glowColor: color,
+      glowIntensity: 0.15,
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(Icons.elderly, color: color, size: 22),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          status,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: color,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Activity',
+                    style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                  ),
+                  Text(
+                    activity,
+                    style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                  ),
+                ],
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  const Text(
+                    'Risk',
+                    style: TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                  ),
+                  Text(
+                    riskLevel,
+                    style: TextStyle(fontSize: 13, color: color, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: () {},
+              icon: Icon(Icons.videocam, size: 16, color: color),
+              label: Text('Watch', style: TextStyle(color: color, fontSize: 12)),
+              style: OutlinedButton.styleFrom(
+                side: BorderSide(color: color.withOpacity(0.5)),
+                padding: const EdgeInsets.symmetric(vertical: 6),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAlertCard({
+    required String type,
+    required String elderlyName,
+    required String time,
+    required String priority,
+    required IconData icon,
+    required Color color,
+  }) {
+    return GlassmorphicCard(
+      padding: const EdgeInsets.all(12),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: color, size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  type,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                Text(
+                  '$elderlyName • $time',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              priority,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w600,
+                color: color,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildQuickAction({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: GlassmorphicCard(
+        glowColor: color,
+        glowIntensity: 0.1,
+        padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 26),
+            const SizedBox(height: 6),
+            Text(
+              label,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============= Monitor Tab =============
+
+class _MonitorTab extends StatelessWidget {
+  const _MonitorTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Live Monitor',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Real-time elderly monitoring',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+                
+                const SizedBox(height: 20),
+                
+                // Live Feed Placeholder
+                Container(
+                  height: 250,
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: AppColors.glassBorder),
+                  ),
+                  child: Stack(
+                    children: [
+                      Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.videocam_off, size: 48, color: AppColors.textSecondary.withOpacity(0.5)),
+                            const SizedBox(height: 12),
+                            const Text(
+                              'Select an elderly to start monitoring',
+                              style: TextStyle(color: AppColors.textSecondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                      // Live indicator
+                      Positioned(
+                        top: 12,
+                        left: 12,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.neonRed.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.circle, color: AppColors.neonRed, size: 8),
+                              SizedBox(width: 4),
+                              Text(
+                                'OFFLINE',
+                                style: TextStyle(
+                                  color: AppColors.neonRed,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                const SizedBox(height: 16),
+                
+                // Activity Overlay Info
+                GlassmorphicCard(
+                  padding: const EdgeInsets.all(14),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildOverlayInfo('Activity', 'N/A', Icons.directions_walk, AppColors.neonCyan),
+                      _buildOverlayInfo('Confidence', 'N/A', Icons.verified, AppColors.neonGreen),
+                      _buildOverlayInfo('Fall Risk', 'N/A', Icons.warning, AppColors.neonOrange),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Elderly Selection
+          Expanded(
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              decoration: const BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Select Elderly',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Expanded(
+                    child: ListView(
+                      children: [
+                        _buildElderlySelectCard('Margaret', 'Last active: 2 min ago', true),
+                        _buildElderlySelectCard('Robert', 'Last active: 15 min ago', false),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOverlayInfo(String label, String value, IconData icon, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 22),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildElderlySelectCard(String name, String lastActive, bool isOnline) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassmorphicCard(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Stack(
+              children: [
+                Container(
+                  width: 45,
+                  height: 45,
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight,
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.elderly, color: AppColors.textSecondary),
+                ),
+                Positioned(
+                  right: 0,
+                  bottom: 0,
+                  child: Container(
+                    width: 14,
+                    height: 14,
+                    decoration: BoxDecoration(
+                      color: isOnline ? AppColors.neonGreen : AppColors.textSecondary,
+                      shape: BoxShape.circle,
+                      border: Border.all(color: AppColors.surface, width: 2),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  Text(
+                    lastActive,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () {},
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.neonCyan,
+                foregroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              ),
+              child: const Text('Watch', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ============= Alerts Tab =============
+
+class _AlertsTab extends StatelessWidget {
+  const _AlertsTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Alerts',
+                      style: TextStyle(
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      '3 unacknowledged alerts',
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight,
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.filter_list, size: 16, color: AppColors.textSecondary),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Filter',
+                        style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          // Alert Tabs
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20),
+            child: Row(
+              children: [
+                _buildFilterChip('All', true),
+                const SizedBox(width: 8),
+                _buildFilterChip('Critical', false),
+                const SizedBox(width: 8),
+                _buildFilterChip('Falls', false),
+                const SizedBox(width: 8),
+                _buildFilterChip('Geofence', false),
+              ],
+            ),
+          ),
+          
+          const SizedBox(height: 16),
+          
+          // Alerts List
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 20),
+              children: [
+                _buildDetailedAlertCard(
+                  type: 'Fall Detected',
+                  elderlyName: 'Margaret',
+                  time: '2 min ago',
+                  description: 'Possible fall detected in living room. Immediate attention required.',
+                  priority: 'Critical',
+                  icon: Icons.warning,
+                  color: AppColors.neonRed,
+                  isNew: true,
+                ),
+                const SizedBox(height: 12),
+                _buildDetailedAlertCard(
+                  type: 'Extended Inactivity',
+                  elderlyName: 'Robert',
+                  time: '15 min ago',
+                  description: 'No movement detected for 45 minutes. Last location: Bedroom.',
+                  priority: 'High',
+                  icon: Icons.timer_off,
+                  color: AppColors.neonOrange,
+                  isNew: true,
+                ),
+                const SizedBox(height: 12),
+                _buildDetailedAlertCard(
+                  type: 'Geofence Breach',
+                  elderlyName: 'Margaret',
+                  time: '1 hour ago',
+                  description: 'Left designated safe zone "Home" at 2:30 PM.',
+                  priority: 'Medium',
+                  icon: Icons.location_off,
+                  color: AppColors.neonPurple,
+                  isNew: true,
+                ),
+                const SizedBox(height: 12),
+                _buildDetailedAlertCard(
+                  type: 'Activity Anomaly',
+                  elderlyName: 'Robert',
+                  time: '3 hours ago',
+                  description: 'Unusual activity pattern detected. Consider check-in.',
+                  priority: 'Low',
+                  icon: Icons.psychology,
+                  color: AppColors.neonCyan,
+                  isNew: false,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFilterChip(String label, bool isSelected) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: isSelected ? AppColors.neonCyan.withOpacity(0.15) : AppColors.surfaceLight,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isSelected ? AppColors.neonCyan : Colors.transparent,
+        ),
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 12,
+          color: isSelected ? AppColors.neonCyan : AppColors.textSecondary,
+          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetailedAlertCard({
+    required String type,
+    required String elderlyName,
+    required String time,
+    required String description,
+    required String priority,
+    required IconData icon,
+    required Color color,
+    required bool isNew,
+  }) {
+    return GlassmorphicCard(
+      glowColor: isNew ? color : null,
+      glowIntensity: 0.15,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          type,
+                          style: const TextStyle(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        if (isNew) ...[
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.neonRed,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: const Text(
+                              'NEW',
+                              style: TextStyle(
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$elderlyName • $time',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: color.withOpacity(0.3)),
+                ),
+                child: Text(
+                  priority,
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: color,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            description,
+            style: const TextStyle(
+              fontSize: 13,
+              color: AppColors.textSecondary,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () {},
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: color.withOpacity(0.5)),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  child: Text('Acknowledge', style: TextStyle(color: color, fontSize: 12)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton(
+                  onPressed: () {},
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: color,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                  ),
+                  child: const Text('Respond', style: TextStyle(fontSize: 12)),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============= Elderly List Tab =============
+
+class _ElderlyListTab extends StatelessWidget {
+  const _ElderlyListTab();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'My Elderly',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.neonGreen.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.add, color: AppColors.neonGreen),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              '2 elderly under your care',
+              style: TextStyle(
+                fontSize: 14,
+                color: AppColors.textSecondary,
+              ),
+            ),
+            
+            const SizedBox(height: 24),
+            
+            // Elderly Cards
+            _buildElderlyProfileCard(
+              name: 'Margaret Johnson',
+              age: 78,
+              status: 'Active',
+              lastActivity: 'Walking',
+              fallRisk: 'Low',
+              healthScore: 85,
+              color: AppColors.neonGreen,
+            ),
+            const SizedBox(height: 16),
+            _buildElderlyProfileCard(
+              name: 'Robert Smith',
+              age: 82,
+              status: 'Resting',
+              lastActivity: 'Sitting',
+              fallRisk: 'Medium',
+              healthScore: 72,
+              color: AppColors.neonOrange,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildElderlyProfileCard({
+    required String name,
+    required int age,
+    required String status,
+    required String lastActivity,
+    required String fallRisk,
+    required int healthScore,
+    required Color color,
+  }) {
+    return GlassmorphicCard(
+      glowColor: color,
+      glowIntensity: 0.15,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: color, width: 2),
+                ),
+                child: Icon(Icons.elderly, color: color, size: 30),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      name,
+                      style: const TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$age years old',
+                      style: const TextStyle(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: color,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          status,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: color,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Health Score
+              SizedBox(
+                width: 50,
+                height: 50,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CircularProgressIndicator(
+                      value: healthScore / 100,
+                      strokeWidth: 4,
+                      backgroundColor: color.withOpacity(0.1),
+                      valueColor: AlwaysStoppedAnimation<Color>(color),
+                    ),
+                    Text(
+                      '$healthScore',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                        color: color,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          const Divider(color: AppColors.glassBorder),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildInfoColumn('Last Activity', lastActivity),
+              _buildInfoColumn('Fall Risk', fallRisk),
+              _buildInfoColumn('Alerts Today', '1'),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.videocam, size: 18),
+                  label: const Text('Watch'),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: color.withOpacity(0.5)),
+                    foregroundColor: color,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {},
+                  icon: const Icon(Icons.bar_chart, size: 18),
+                  label: const Text('Reports'),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: AppColors.textSecondary.withOpacity(0.3)),
+                    foregroundColor: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceLight,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: IconButton(
+                  onPressed: () {},
+                  icon: const Icon(Icons.more_vert, color: AppColors.textSecondary),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoColumn(String label, String value) {
+    return Column(
+      children: [
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            color: AppColors.textSecondary,
+          ),
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: AppColors.textPrimary,
+          ),
+        ),
+      ],
+    );
+  }
+}

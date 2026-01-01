@@ -6,7 +6,20 @@ import 'package:flutter/material.dart';
 import '../../screens/auth/login_screen.dart';
 import '../../screens/auth/register_screen.dart';
 import '../../screens/auth/splash_screen.dart';
-import '../../screens/home/dashboard_screen.dart';
+import '../../screens/home/role_based_dashboard.dart';
+import '../../screens/physio/physio_home_screen.dart';
+import '../../screens/physio/gait_analysis_screen.dart';
+import '../../screens/physio/tug_test_screen.dart';
+import '../../screens/physio/exercise_library_screen.dart';
+import '../../screens/nutrition/nutrition_home_screen.dart';
+import '../../screens/nutrition/food_scanner_screen.dart';
+import '../../screens/nutrition/meal_log_screen.dart';
+import '../../screens/nutrition/meal_plan_screen.dart';
+import '../../screens/nutrition/hydration_screen.dart';
+import '../../screens/guardian/guardian_home_screen.dart';
+import '../../screens/guardian/live_monitor_screen.dart';
+import '../../screens/guardian/alerts_screen.dart';
+import '../../screens/guardian/activity_log_screen.dart';
 
 class AppRoutes {
   AppRoutes._();
@@ -26,6 +39,7 @@ class AppRoutes {
   // Nutrition routes
   static const String nutritionHome = '/nutrition';
   static const String foodScanner = '/nutrition/scanner';
+  static const String mealLog = '/nutrition/meal-log';
   static const String mealPlan = '/nutrition/meal-plan';
   static const String hydration = '/nutrition/hydration';
   
@@ -33,6 +47,7 @@ class AppRoutes {
   static const String guardianHome = '/guardian';
   static const String liveMonitor = '/guardian/monitor';
   static const String alerts = '/guardian/alerts';
+  static const String activityLog = '/guardian/activity';
   static const String geofence = '/guardian/geofence';
 
   /// Generate routes
@@ -48,9 +63,39 @@ class AppRoutes {
         return _slideRoute(const RegisterScreen(), settings);
       
       case dashboard:
-        return _fadeRoute(const DashboardScreen(), settings);
+        return _fadeRoute(const RoleBasedDashboard(), settings);
       
-      // TODO: Add more routes as screens are created
+      // Physio routes
+      case physioHome:
+        return _slideRoute(const PhysioHomeScreen(), settings);
+      case gaitAnalysis:
+        return _slideRoute(const GaitAnalysisScreen(), settings);
+      case tugTest:
+        return _slideRoute(const TUGTestScreen(), settings);
+      case exercises:
+        return _slideRoute(const ExerciseLibraryScreen(), settings);
+      
+      // Nutrition routes
+      case nutritionHome:
+        return _slideRoute(const NutritionHomeScreen(), settings);
+      case foodScanner:
+        return _slideRoute(const FoodScannerScreen(), settings);
+      case mealLog:
+        return _slideRoute(const MealLogScreen(), settings);
+      case mealPlan:
+        return _slideRoute(const MealPlanScreen(), settings);
+      case hydration:
+        return _slideRoute(const HydrationScreen(), settings);
+      
+      // Guardian routes
+      case guardianHome:
+        return _slideRoute(const GuardianHomeScreen(), settings);
+      case liveMonitor:
+        return _slideRoute(const LiveMonitorScreen(), settings);
+      case alerts:
+        return _slideRoute(const AlertsScreen(), settings);
+      case activityLog:
+        return _slideRoute(const ActivityLogScreen(), settings);
       
       default:
         return _fadeRoute(
@@ -108,3 +153,6 @@ class AppRoutes {
     );
   }
 }
+
+/// Alias for easier access
+typedef Routes = AppRoutes;
