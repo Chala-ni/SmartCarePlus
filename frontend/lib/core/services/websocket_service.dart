@@ -7,7 +7,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import '../providers/auth_provider.dart';
+import '../../providers/auth_provider.dart';
 
 /// WebSocket message types (matches backend)
 enum WSMessageType {

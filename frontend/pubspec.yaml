@@ -72,16 +72,5 @@ flutter:
     - assets/icons/
     - assets/animations/
 
-  fonts:
-    - family: Orbitron
-      fonts:
-        - asset: assets/fonts/Orbitron/Orbitron-Regular.ttf
-        - asset: assets/fonts/Orbitron/Orbitron-Bold.ttf
-          weight: 700
-    - family: Exo2
-      fonts:
-        - asset: assets/fonts/Exo2/Exo2-Regular.ttf
-        - asset: assets/fonts/Exo2/Exo2-SemiBold.ttf
-          weight: 600
-        - asset: assets/fonts/Exo2/Exo2-Bold.ttf
-          weight: 700
+  # NOTE: Using google_fonts package for Orbitron and Exo2 fonts
+  # No local font files needed - fonts are downloaded at runtime

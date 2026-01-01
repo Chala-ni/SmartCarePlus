@@ -86,7 +86,7 @@ class AppTheme {
         ),
 
         // Card Theme with Glassmorphism base
-        cardTheme: CardTheme(
+        cardTheme: CardThemeData(
           color: AppColors.glassWhite,
           elevation: 0,
           shape: RoundedRectangleBorder(
@@ -202,7 +202,7 @@ class AppTheme {
         ),
 
         // Dialog Theme
-        dialogTheme: DialogTheme(
+        dialogTheme: DialogThemeData(
           backgroundColor: AppColors.surface,
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(20),

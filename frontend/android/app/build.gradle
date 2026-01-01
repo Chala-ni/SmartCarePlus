@@ -30,7 +30,7 @@ if (flutterVersionName == null) {
 
 android {
     namespace "com.smartcare.plus"
-    compileSdk 34
+    compileSdk 36
     
     // ============================================
     // CRITICAL: Force specific NDK version
@@ -58,7 +58,7 @@ android {
         // CRITICAL: minSdk 24 required for Camera/ML plugins
         // ============================================
         minSdk 24
-        targetSdk 34
+        targetSdk 36
         
         versionCode flutterVersionCode.toInteger()
         versionName flutterVersionName
