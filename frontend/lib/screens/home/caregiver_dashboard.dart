@@ -9,6 +9,7 @@ import 'package:video_player/video_player.dart';
 import 'dart:async';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
+import '../../core/services/api_service.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
@@ -699,14 +700,56 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
   Timer? _timestampTimer;
   String _currentTimestamp = '';
   bool _hasLoadedElderly = false;
+  String? _currentVideoId; // Track current video ID
+  
+  /// Get the video URL from the backend
+  String _getVideoUrl(String videoId) {
+    return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
+  }
 
-  final Map<String, Map<String, dynamic>> _patientFeeds = {
-    'Margaret Johnson': {'video': 'assets/videos/walking_normal_1.mp4', 'activity': 'Walking', 'risk': 'Low'},
-    'Robert Smith': {'video': 'assets/videos/sitting_resting_1.mp4', 'activity': 'Resting', 'risk': 'Medium'},
-    'Eleanor Brown': {'video': 'assets/videos/walking_slow_1.mp4', 'activity': 'Walking', 'risk': 'Low'},
-    'James Wilson': {'video': 'assets/videos/lying_down_1.mp4', 'activity': 'Lying', 'risk': 'High'},
-    'Helen Davis': {'video': 'assets/videos/standing_idle_1.mp4', 'activity': 'Standing', 'risk': 'Low'},
-  };
+  /// Get video feed info for a patient (demo fallback for unconnected patients)
+  Map<String, dynamic>? _getPatientFeed(String patientName, List<ElderlyInfo> connectedElderly) {
+    // First check if this is a connected elderly
+    for (final elderly in connectedElderly) {
+      if (elderly.name == patientName) {
+        return {
+          'videoId': elderly.assignedVideoId,
+          'activity': _getActivityFromVideo(elderly.assignedVideoId),
+          'risk': _getRiskFromVideo(elderly.assignedVideoId),
+        };
+      }
+    }
+    
+    // Fallback for demo patients
+    const demoPatients = {
+      'Margaret Johnson': {'videoId': 'walking_normal_1', 'activity': 'Walking', 'risk': 'Low'},
+      'Robert Smith': {'videoId': 'sitting_resting_1', 'activity': 'Resting', 'risk': 'Medium'},
+      'Eleanor Brown': {'videoId': 'walking_slow_1', 'activity': 'Walking', 'risk': 'Low'},
+      'James Wilson': {'videoId': 'lying_down_1', 'activity': 'Lying', 'risk': 'High'},
+      'Helen Davis': {'videoId': 'standing_idle_1', 'activity': 'Standing', 'risk': 'Low'},
+    };
+    return demoPatients[patientName];
+  }
+  
+  /// Infer activity from video ID
+  String _getActivityFromVideo(String videoId) {
+    if (videoId.contains('walking')) return 'Walking';
+    if (videoId.contains('sitting')) return 'Resting';
+    if (videoId.contains('standing')) return 'Standing';
+    if (videoId.contains('lying')) return 'Lying';
+    if (videoId.contains('fall')) return 'Alert';
+    if (videoId.contains('gait')) return 'Walking';
+    return 'Active';
+  }
+  
+  /// Infer risk level from video ID
+  String _getRiskFromVideo(String videoId) {
+    if (videoId.contains('fall')) return 'High';
+    if (videoId.contains('abnormal')) return 'Medium';
+    if (videoId.contains('slow')) return 'Medium';
+    if (videoId.contains('lying')) return 'High';
+    return 'Low';
+  }
 
   @override
   void initState() {
@@ -740,17 +783,23 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
   }
 
   Future<void> _startWatching(String patientName) async {
-    final feed = _patientFeeds[patientName];
+    final connectionState = ref.read(connectionProvider);
+    final feed = _getPatientFeed(patientName, connectionState.myElderly);
     if (feed == null) return;
 
     setState(() {
       _isLoading = true;
       _selectedPatient = patientName;
+      _currentVideoId = feed['videoId'];
     });
 
     try {
       await _videoController?.dispose();
-      _videoController = VideoPlayerController.asset(feed['video']);
+      
+      // Stream video from backend API
+      final videoUrl = _getVideoUrl(feed['videoId']);
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
+      
       await _videoController!.initialize();
       _videoController!.setLooping(true);
       await _videoController!.play();
@@ -760,6 +809,7 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
         _isLoading = false;
       });
     } catch (e) {
+      debugPrint('Video initialization error: $e');
       setState(() {
         _isLoading = false;
         _isWatching = false;

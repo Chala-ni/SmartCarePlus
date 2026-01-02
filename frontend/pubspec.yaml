@@ -74,7 +74,8 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/animations/
-    - assets/videos/
+    # NOTE: Videos moved to backend/media/simulation_footage/guardian/
+    # They are now served via the backend API at /api/guardian/video/{video_id}
 
   # NOTE: Using google_fonts package for Orbitron and Exo2 fonts
   # No local font files needed - fonts are downloaded at runtime

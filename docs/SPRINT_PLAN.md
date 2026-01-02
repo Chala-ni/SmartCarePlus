@@ -13,9 +13,9 @@
 
 | Member | Component | Primary Stack |
 |--------|-----------|---------------|
-| **Neelaka** | Physio Service | Python (MediaPipe, TensorFlow), Flutter |
+| **Neelaka** | Physio Service | Python (MediaPipe + Rules), Flutter |
 | **Kulasekara** | Nutrition Service | Python (CNN, USDA API), Flutter |
-| **Madhushani** | Guardian Service | Python (LSTM, Fall Detection), Flutter |
+| **Madhushani** | Guardian Service | Python (SlowFast, CNN+LSTM, Fall Detection), Flutter |
 
 ---
 
@@ -110,12 +110,12 @@
 
 | Day | Task | Type | Description | Hours |
 |-----|------|------|-------------|-------|
-| 8-9 | MediaPipe + Gait API | Backend | Setup MediaPipe, `POST /analyze-gait`, metrics calculator | 12 |
-| 10 | TUG Test API | Backend | `POST /physio/tug-test`, fall risk scoring | 6 |
-| 11 | Exercise endpoints | Backend | Exercise library CRUD, prescriptions | 6 |
+| 8-9 | MediaPipe Pose Setup | Backend | Setup MediaPipe, joint angle calculator, form validator | 12 |
+| 10 | Exercise Monitoring API | Backend | `POST /exercise-session`, rep counting, form scoring | 6 |
+| 11 | Pain Detection Rules | Backend | Shaking/slowing detection, intensity adaptation | 6 |
 | 12 | Camera stream widget | Frontend | Capture frames, WebSocket streaming | 6 |
-| 13 | Pose overlay + Gait screen | Frontend | Skeleton overlay, real-time metrics display | 8 |
-| 14 | TUG test screen | Frontend | Guided test with timer, dark neon UI | 6 |
+| 13 | Pose overlay + Exercise screen | Frontend | Skeleton overlay, real-time metrics display | 8 |
+| 14 | Exercise library screen | Frontend | Browse exercises, dark neon UI | 6 |
 
 ### Kulasekara (Nutrition Service) - All Week
 
@@ -132,17 +132,17 @@
 
 | Day | Task | Type | Description | Hours |
 |-----|------|------|-------------|-------|
-| 8-9 | Alert system | Backend | Alert CRUD, WebSocket push, SOS endpoint | 10 |
+| 8-9 | Alert system + Gait API | Backend | Alert CRUD, `POST /analyze-gait`, gait metrics | 10 |
 | 10 | Video stream WebSocket | Backend | `/ws/guardian/stream/{id}`, pre-recorded loader | 8 |
-| 11 | Activity classifier | Backend | Basic activity detection (walking, sitting, lying) | 6 |
+| 11 | TUG Test + Activity classifier | Backend | TUG test processing, activity detection (walking, sitting, lying) | 6 |
 | 12 | Live feed widget | Frontend | WebSocket video display, dark theme | 6 |
-| 13 | Alert cards + SOS | Frontend | Neon alert badges, glowing SOS button | 6 |
-| 14 | Live monitor screen | Frontend | Full monitoring with activity overlay | 8 |
+| 13 | Alert cards + SOS + Gait screen | Frontend | Neon alert badges, glowing SOS, gait analysis UI | 6 |
+| 14 | Live monitor + TUG screen | Frontend | Full monitoring with activity overlay, TUG timer | 8 |
 
 **Sprint 2 Deliverables:**
-- [ ] Neelaka: Gait analysis + TUG test working end-to-end
+- [ ] Neelaka: Exercise monitoring + pose guidance working end-to-end
 - [ ] Kulasekara: Food logging + meal plans generated
-- [ ] Madhushani: Live video stream + alerts working
+- [ ] Madhushani: Live video stream + gait analysis + TUG test + alerts working
 
 ---
 
@@ -156,8 +156,8 @@
 
 | Day | Task | Type | Description | Hours |
 |-----|------|------|-------------|-------|
-| 15 | Pre-trained model setup | Backend | Load MediaPipe + scikit-learn fall risk classifier | 6 |
-| 16 | Real-time inference | Backend | Worker thread inference, WebSocket streaming | 8 |
+| 15 | MediaPipe optimization | Backend | Optimize pose extraction, reduce latency | 6 |
+| 16 | Real-time form validation | Backend | Joint angle rules, form scoring algorithm | 8 |
 | 17 | Exercise library | Backend | Seed exercises, session logging | 4 |
 | 17 | Progress reports | Backend | Historical data, PDF generation | 4 |
 | 18 | Exercise screens | Frontend | Library + session with pose feedback | 8 |
@@ -178,12 +178,12 @@
 
 | Day | Task | Type | Description | Hours |
 |-----|------|------|-------------|-------|
-| 15 | Fall detection LSTM | Backend | Load pre-trained fall detection model | 6 |
-| 16 | Detection pipeline | Backend | Frame → Pose → LSTM → Alert (worker thread) | 8 |
-| 17 | Geofence system | Backend | CRUD, breach detection | 6 |
-| 17 | Geofence map widget | Frontend | Google Maps, draw/edit zones | 6 |
-| 18 | Fall alert modal | Frontend | Full-screen alert, captured frame, vibration | 6 |
-| 18 | Activity timeline | Frontend | Dark timeline widget with icons | 4 |
+| 15 | SlowFast + Fall detection | Backend | Load SlowFast model, fall detection CNN+LSTM | 6 |
+| 16 | Detection pipeline | Backend | Frame → Pose → SlowFast → Alert (worker thread) | 8 |
+| 17 | Gait analysis + Geofence | Backend | Gait pattern classification, geofence CRUD | 6 |
+| 17 | Geofence map + Fall risk widget | Frontend | Google Maps, fall risk indicator | 6 |
+| 18 | Fall alert modal + Gait screen | Frontend | Full-screen alert, gait metrics display | 6 |
+| 18 | Activity timeline + TUG polish | Frontend | Dark timeline widget, TUG improvements | 4 |
 
 ### Days 19-21: Performance Optimization (All Team)
 

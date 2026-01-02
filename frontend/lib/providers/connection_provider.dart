@@ -66,26 +66,57 @@ class InviteCodeInfo {
   }
 }
 
+/// Available demo video IDs for simulation
+const List<String> availableDemoVideos = [
+  'walking_normal_1',
+  'walking_normal_2',
+  'walking_slow_1',
+  'sitting_resting_1',
+  'lying_down_1',
+  'standing_idle_1',
+  'gait_normal_1',
+  'gait_abnormal_1',
+  'fall_indoor_1',
+  'fall_outdoor_1',
+];
+
+/// Assigns a random demo video to an elderly based on their ID
+String _assignRandomVideo(String elderlyId) {
+  // Use elderly ID hash to get consistent but "random" video assignment
+  final hash = elderlyId.hashCode.abs();
+  return availableDemoVideos[hash % availableDemoVideos.length];
+}
+
 class ElderlyInfo {
   final String id;
   final String name;
   final String connectionType;
   final String connectedAt;
+  final String assignedVideoId;
 
   ElderlyInfo({
     required this.id,
     required this.name,
     required this.connectionType,
     required this.connectedAt,
+    required this.assignedVideoId,
   });
 
   factory ElderlyInfo.fromJson(Map<String, dynamic> json) {
+    final id = json['id'] ?? '';
     return ElderlyInfo(
-      id: json['id'] ?? '',
+      id: id,
       name: json['name'] ?? '',
       connectionType: json['connection_type'] ?? '',
       connectedAt: json['connected_at'] ?? '',
+      // Assign a random video based on elderly ID for demo purposes
+      assignedVideoId: json['assigned_video_id'] ?? _assignRandomVideo(id),
     );
+  }
+
+  /// Get the full video URL for streaming
+  String getVideoUrl(String baseUrl) {
+    return '$baseUrl/api/guardian/video/$assignedVideoId';
   }
 }
 

@@ -103,6 +103,136 @@ class GaitMetrics {
   }
 }
 
+/// Scheduled exercise with status tracking
+class ScheduledExercise {
+  final String id;
+  final String exerciseId;
+  final String name;
+  final DateTime scheduledDate;
+  final String scheduledTime;
+  final String duration;
+  final String difficulty;
+  final ScheduleStatus status;
+  final DateTime? completedAt;
+
+  ScheduledExercise({
+    required this.id,
+    required this.exerciseId,
+    required this.name,
+    required this.scheduledDate,
+    required this.scheduledTime,
+    required this.duration,
+    required this.difficulty,
+    this.status = ScheduleStatus.upcoming,
+    this.completedAt,
+  });
+
+  factory ScheduledExercise.fromJson(Map<String, dynamic> json) {
+    return ScheduledExercise(
+      id: json['id'] ?? '',
+      exerciseId: json['exercise_id'] ?? '',
+      name: json['name'] ?? '',
+      scheduledDate: DateTime.tryParse(json['scheduled_date'] ?? '') ?? DateTime.now(),
+      scheduledTime: json['scheduled_time'] ?? '',
+      duration: json['duration'] ?? '',
+      difficulty: json['difficulty'] ?? '',
+      status: ScheduleStatus.fromString(json['status'] ?? 'upcoming'),
+      completedAt: json['completed_at'] != null 
+          ? DateTime.tryParse(json['completed_at']) 
+          : null,
+    );
+  }
+
+  ScheduledExercise copyWith({
+    ScheduleStatus? status,
+    DateTime? completedAt,
+  }) {
+    return ScheduledExercise(
+      id: id,
+      exerciseId: exerciseId,
+      name: name,
+      scheduledDate: scheduledDate,
+      scheduledTime: scheduledTime,
+      duration: duration,
+      difficulty: difficulty,
+      status: status ?? this.status,
+      completedAt: completedAt ?? this.completedAt,
+    );
+  }
+}
+
+enum ScheduleStatus {
+  upcoming,
+  inProgress,
+  completed,
+  missed,
+  rescheduled;
+
+  static ScheduleStatus fromString(String value) {
+    switch (value.toLowerCase()) {
+      case 'completed':
+        return ScheduleStatus.completed;
+      case 'missed':
+        return ScheduleStatus.missed;
+      case 'in_progress':
+      case 'inprogress':
+        return ScheduleStatus.inProgress;
+      case 'rescheduled':
+        return ScheduleStatus.rescheduled;
+      default:
+        return ScheduleStatus.upcoming;
+    }
+  }
+}
+
+/// Exercise compliance tracking
+class ExerciseCompliance {
+  final int totalScheduled;
+  final int completed;
+  final int missed;
+  final double complianceRate;
+  final int currentStreak;
+  final int longestStreak;
+  final DateTime? lastExerciseDate;
+
+  ExerciseCompliance({
+    required this.totalScheduled,
+    required this.completed,
+    required this.missed,
+    required this.complianceRate,
+    required this.currentStreak,
+    required this.longestStreak,
+    this.lastExerciseDate,
+  });
+
+  factory ExerciseCompliance.fromJson(Map<String, dynamic> json) {
+    return ExerciseCompliance(
+      totalScheduled: json['total_scheduled'] ?? 0,
+      completed: json['completed'] ?? 0,
+      missed: json['missed'] ?? 0,
+      complianceRate: (json['compliance_rate'] ?? 0).toDouble(),
+      currentStreak: json['current_streak'] ?? 0,
+      longestStreak: json['longest_streak'] ?? 0,
+      lastExerciseDate: json['last_exercise_date'] != null
+          ? DateTime.tryParse(json['last_exercise_date'])
+          : null,
+    );
+  }
+
+  /// Create default/mock compliance data
+  factory ExerciseCompliance.mock() {
+    return ExerciseCompliance(
+      totalScheduled: 28,
+      completed: 22,
+      missed: 4,
+      complianceRate: 78.6,
+      currentStreak: 3,
+      longestStreak: 7,
+      lastExerciseDate: DateTime.now().subtract(const Duration(days: 1)),
+    );
+  }
+}
+
 class PhysioSession {
   final String id;
   final String date;
@@ -140,6 +270,8 @@ class PhysioState {
   final FallRisk? fallRisk;
   final GaitMetrics? gaitMetrics;
   final List<PhysioSession> sessions;
+  final List<ScheduledExercise> todaySchedule;
+  final ExerciseCompliance? compliance;
   final bool isLoading;
   final String? error;
 
@@ -149,9 +281,23 @@ class PhysioState {
     this.fallRisk,
     this.gaitMetrics,
     this.sessions = const [],
+    this.todaySchedule = const [],
+    this.compliance,
     this.isLoading = false,
     this.error,
   });
+
+  /// Get missed exercises from today's schedule
+  List<ScheduledExercise> get missedExercises =>
+      todaySchedule.where((e) => e.status == ScheduleStatus.missed).toList();
+
+  /// Get upcoming exercises from today's schedule
+  List<ScheduledExercise> get upcomingExercises =>
+      todaySchedule.where((e) => e.status == ScheduleStatus.upcoming).toList();
+
+  /// Get completed exercises from today's schedule
+  List<ScheduledExercise> get completedExercises =>
+      todaySchedule.where((e) => e.status == ScheduleStatus.completed).toList();
 
   PhysioState copyWith({
     List<Exercise>? exercises,
@@ -159,6 +305,8 @@ class PhysioState {
     FallRisk? fallRisk,
     GaitMetrics? gaitMetrics,
     List<PhysioSession>? sessions,
+    List<ScheduledExercise>? todaySchedule,
+    ExerciseCompliance? compliance,
     bool? isLoading,
     String? error,
   }) {
@@ -168,6 +316,8 @@ class PhysioState {
       fallRisk: fallRisk ?? this.fallRisk,
       gaitMetrics: gaitMetrics ?? this.gaitMetrics,
       sessions: sessions ?? this.sessions,
+      todaySchedule: todaySchedule ?? this.todaySchedule,
+      compliance: compliance ?? this.compliance,
       isLoading: isLoading ?? this.isLoading,
       error: error,
     );
@@ -254,6 +404,157 @@ class PhysioNotifier extends StateNotifier<PhysioState> {
     }
   }
 
+  /// Load exercise schedule for a specific date
+  Future<void> loadSchedule(String userId, {DateTime? date}) async {
+    state = state.copyWith(isLoading: true, error: null);
+    final targetDate = date ?? DateTime.now();
+    
+    try {
+      final response = await _api.get('/api/physio/schedule/$userId', 
+          queryParams: {'date': targetDate.toIso8601String().split('T')[0]});
+      if (response.success && response.data != null) {
+        final scheduleList = (response.data['schedule'] as List)
+            .map((s) => ScheduledExercise.fromJson(s))
+            .toList();
+        state = state.copyWith(todaySchedule: scheduleList, isLoading: false);
+      } else {
+        // Load mock data for demo
+        _loadMockSchedule();
+      }
+    } catch (e) {
+      // Load mock data for demo
+      _loadMockSchedule();
+    }
+  }
+
+  /// Load compliance statistics
+  Future<void> loadCompliance(String userId) async {
+    try {
+      final response = await _api.get('/api/physio/compliance/$userId');
+      if (response.success && response.data != null) {
+        state = state.copyWith(
+          compliance: ExerciseCompliance.fromJson(response.data),
+        );
+      } else {
+        // Use mock data for demo
+        state = state.copyWith(compliance: ExerciseCompliance.mock());
+      }
+    } catch (e) {
+      // Use mock data for demo
+      state = state.copyWith(compliance: ExerciseCompliance.mock());
+    }
+  }
+
+  /// Mark an exercise as completed
+  Future<void> completeExercise(String scheduleId) async {
+    try {
+      final response = await _api.post('/api/physio/schedule/$scheduleId/complete', {});
+      if (response.success) {
+        // Update local state
+        final updated = state.todaySchedule.map((e) {
+          if (e.id == scheduleId) {
+            return e.copyWith(
+              status: ScheduleStatus.completed,
+              completedAt: DateTime.now(),
+            );
+          }
+          return e;
+        }).toList();
+        state = state.copyWith(todaySchedule: updated);
+      }
+    } catch (e) {
+      // Still update locally for demo
+      final updated = state.todaySchedule.map((e) {
+        if (e.id == scheduleId) {
+          return e.copyWith(
+            status: ScheduleStatus.completed,
+            completedAt: DateTime.now(),
+          );
+        }
+        return e;
+      }).toList();
+      state = state.copyWith(todaySchedule: updated);
+    }
+  }
+
+  /// Reschedule an exercise
+  Future<void> rescheduleExercise(String scheduleId, DateTime newTime) async {
+    try {
+      await _api.post('/api/physio/schedule/$scheduleId/reschedule', {
+        'new_time': newTime.toIso8601String(),
+      });
+      // Update local state
+      final updated = state.todaySchedule.map((e) {
+        if (e.id == scheduleId) {
+          return e.copyWith(status: ScheduleStatus.rescheduled);
+        }
+        return e;
+      }).toList();
+      state = state.copyWith(todaySchedule: updated);
+    } catch (e) {
+      state = state.copyWith(error: 'Failed to reschedule exercise');
+    }
+  }
+
+  /// Load mock schedule data for demo
+  void _loadMockSchedule() {
+    final now = DateTime.now();
+    final mockSchedule = [
+      ScheduledExercise(
+        id: '1',
+        exerciseId: 'ex1',
+        name: 'Morning Stretches',
+        scheduledDate: now,
+        scheduledTime: '7:00 AM',
+        duration: '10 min',
+        difficulty: 'Easy',
+        status: ScheduleStatus.completed,
+        completedAt: now.subtract(const Duration(hours: 5)),
+      ),
+      ScheduledExercise(
+        id: '2',
+        exerciseId: 'ex2',
+        name: 'Chair Stand Exercise',
+        scheduledDate: now,
+        scheduledTime: '9:00 AM',
+        duration: '15 min',
+        difficulty: 'Easy',
+        status: ScheduleStatus.missed,
+      ),
+      ScheduledExercise(
+        id: '3',
+        exerciseId: 'ex3',
+        name: 'Balance Training',
+        scheduledDate: now,
+        scheduledTime: '11:00 AM',
+        duration: '10 min',
+        difficulty: 'Medium',
+        status: ScheduleStatus.missed,
+      ),
+      ScheduledExercise(
+        id: '4',
+        exerciseId: 'ex4',
+        name: 'Heel-to-Toe Walk',
+        scheduledDate: now,
+        scheduledTime: '2:00 PM',
+        duration: '10 min',
+        difficulty: 'Medium',
+        status: ScheduleStatus.upcoming,
+      ),
+      ScheduledExercise(
+        id: '5',
+        exerciseId: 'ex5',
+        name: 'Evening Stretches',
+        scheduledDate: now,
+        scheduledTime: '6:00 PM',
+        duration: '10 min',
+        difficulty: 'Easy',
+        status: ScheduleStatus.upcoming,
+      ),
+    ];
+    state = state.copyWith(todaySchedule: mockSchedule, isLoading: false);
+  }
+
   void clearError() {
     state = state.copyWith(error: null);
   }
@@ -284,4 +585,28 @@ final exercisesProvider = FutureProvider.family<List<Exercise>, String?>((ref, c
     return (response.data['exercises'] as List).map((e) => Exercise.fromJson(e)).toList();
   }
   return [];
+});
+
+/// Provider for missed exercises - for use in alerts/banners
+final missedExercisesProvider = Provider<List<ScheduledExercise>>((ref) {
+  final state = ref.watch(physioProvider);
+  return state.missedExercises;
+});
+
+/// Provider for upcoming exercises  
+final upcomingExercisesProvider = Provider<List<ScheduledExercise>>((ref) {
+  final state = ref.watch(physioProvider);
+  return state.upcomingExercises;
+});
+
+/// Provider for compliance statistics
+final complianceProvider = Provider<ExerciseCompliance?>((ref) {
+  final state = ref.watch(physioProvider);
+  return state.compliance;
+});
+
+/// Provider for checking if there are any missed exercises
+final hasMissedExercisesProvider = Provider<bool>((ref) {
+  final missed = ref.watch(missedExercisesProvider);
+  return missed.isNotEmpty;
 });

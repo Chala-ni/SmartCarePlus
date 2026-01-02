@@ -11,6 +11,7 @@ import '../../screens/physio/physio_home_screen.dart';
 import '../../screens/physio/gait_analysis_screen.dart';
 import '../../screens/physio/tug_test_screen.dart';
 import '../../screens/physio/exercise_library_screen.dart';
+import '../../screens/physio/exercise_schedule_screen.dart';
 import '../../screens/nutrition/nutrition_home_screen.dart';
 import '../../screens/nutrition/food_scanner_screen.dart';
 import '../../screens/nutrition/meal_log_screen.dart';
@@ -37,6 +38,7 @@ class AppRoutes {
   static const String gaitAnalysis = '/physio/gait';
   static const String tugTest = '/physio/tug';
   static const String exercises = '/physio/exercises';
+  static const String exerciseSchedule = '/physio/schedule';
   
   // Nutrition routes
   static const String nutritionHome = '/nutrition';
@@ -76,6 +78,8 @@ class AppRoutes {
         return _slideRoute(const TUGTestScreen(), settings);
       case exercises:
         return _slideRoute(const ExerciseLibraryScreen(), settings);
+      case exerciseSchedule:
+        return _slideRoute(const ExerciseScheduleScreen(), settings);
       
       // Nutrition routes
       case nutritionHome:

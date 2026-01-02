@@ -15,11 +15,11 @@
 
 ---
 
-## 1. Neelaka - Physio Service (Physiotherapy & Mobility Analysis)
+## 1. Neelaka - Physio Service (Physiotherapy & Exercise Monitoring)
 
 ### Overview
 
-AI-powered physiotherapy monitoring system for elderly mobility assessment, fall risk prediction, and exercise compliance tracking. Uses **MediaPipe Pose** for skeletal tracking and **TensorFlow/Scikit-learn** for gait analysis.
+AI-powered physiotherapy exercise monitoring system for elderly rehabilitation. Uses **MediaPipe Pose** for real-time skeletal tracking combined with **mathematical rules** for exercise form validation, repetition counting, pain indicator detection (shaking, slowing), and adaptive exercise intensity. No deep learning models required - relies on joint angle calculations and movement pattern analysis.
 
 ### 1.1 Backend Endpoints (FastAPI)
 
@@ -27,23 +27,21 @@ AI-powered physiotherapy monitoring system for elderly mobility assessment, fall
 
 | Method | Endpoint | Description | Request Body | Response |
 |--------|----------|-------------|--------------|----------|
-| `POST` | `/api/physio/analyze-gait` | Analyze gait from uploaded video | `multipart/form-data: video file` | Gait metrics JSON |
-| `POST` | `/api/physio/tug-test` | Process TUG (Timed Up and Go) test video | `multipart/form-data: video file` | TUG score, time, analysis |
-| `POST` | `/api/physio/balance-assessment` | Analyze balance from stance video | `multipart/form-data: video file` | Balance score, sway metrics |
-| `POST` | `/api/physio/rom-analysis` | Range of Motion analysis | `multipart/form-data: video file, joint: string` | ROM degrees, flexibility score |
-| `GET` | `/api/physio/exercises` | Get exercise library | Query: `category`, `difficulty` | Exercise list |
+| `GET` | `/api/physio/exercises` | Get exercise library | Query: `category`, `difficulty`, `condition` | Exercise list |
 | `GET` | `/api/physio/exercises/{user_id}` | Get prescribed exercises for user | - | Personalized exercise plan |
-| `POST` | `/api/physio/exercise-session` | Log completed exercise session | `{user_id, exercise_id, duration, reps}` | Session record |
+| `POST` | `/api/physio/exercise-session` | Log completed exercise session | `{user_id, exercise_id, duration, reps, form_score}` | Session record |
+| `POST` | `/api/physio/rom-analysis` | Range of Motion analysis | `multipart/form-data: video file, joint: string` | ROM degrees, flexibility score |
 | `GET` | `/api/physio/progress/{user_id}` | Get physiotherapy progress over time | Query: `start_date`, `end_date` | Progress metrics, charts data |
-| `GET` | `/api/physio/fall-risk/{user_id}` | Get current fall risk score | - | Risk score (0-100), factors |
 | `GET` | `/api/physio/reports/{user_id}` | Generate PDF progress report | Query: `period` | PDF download / report JSON |
 | `POST` | `/api/physio/prescribe` | Caregiver prescribes exercises | `{user_id, exercises[], notes}` | Prescription record |
+| `GET` | `/api/physio/pain-indicators/{user_id}` | Get detected pain indicators | Query: `session_id` | Pain events (shaking, slowing) |
+| `POST` | `/api/physio/adapt-intensity` | Adjust exercise intensity based on pain | `{user_id, exercise_id, adjustment}` | Updated exercise plan |
 
-#### WebSocket Endpoint (Real-time Video Analysis) ⚠️ CRITICAL
+#### WebSocket Endpoint (Real-time Exercise Monitoring) ⚠️ CRITICAL
 
 | Endpoint | Description | Protocol |
 |----------|-------------|----------|
-| `WS /ws/physio/stream/{user_id}` | Real-time video stream for gait analysis | WebSocket + Worker Threads |
+| `WS /ws/physio/stream/{user_id}` | Real-time video stream for exercise form monitoring | WebSocket + MediaPipe Pose |
 
 **WebSocket Message Types:**
 
@@ -57,8 +55,8 @@ interface PhysioFrameMessage {
 }
 
 interface PhysioControlMessage {
-  type: "START_ANALYSIS" | "STOP_ANALYSIS" | "START_TUG_TEST";
-  analysisType: "gait" | "balance" | "tug" | "rom";
+  type: "START_EXERCISE" | "STOP_EXERCISE" | "PAUSE_EXERCISE";
+  exerciseType: "arm_raise" | "leg_lift" | "shoulder_rotation" | "knee_bend" | "rom";
 }
 
 // Server → Client
@@ -69,51 +67,56 @@ interface PoseResultMessage {
   confidence: number;
 }
 
-interface GaitMetricsMessage {
-  type: "GAIT_METRICS";
-  strideLength: number;        // cm
-  cadence: number;             // steps/min
-  speed: number;               // m/s
-  symmetryIndex: number;       // 0-1
-  hipAngle: number;            // degrees
-  kneeAngle: number;           // degrees
+interface ExerciseMetricsMessage {
+  type: "EXERCISE_METRICS";
+  repCount: number;            // current rep count
+  formScore: number;           // 0-100 form quality
+  jointAngles: Record<string, number>;  // joint name -> degrees
+  targetAngle: number;         // target angle for exercise
+  deviation: number;           // degrees off from target
 }
 
-interface TUGResultMessage {
-  type: "TUG_RESULT";
-  totalTime: number;           // seconds
-  sitToStandTime: number;
-  walkTime: number;
-  turnTime: number;
-  standToSitTime: number;
-  riskCategory: "low" | "moderate" | "high";
+interface PainIndicatorMessage {
+  type: "PAIN_INDICATOR";
+  indicatorType: "shaking" | "slowing" | "facial_discomfort" | "range_reduction";
+  confidence: number;          // 0-1
+  recommendation: "reduce_intensity" | "take_break" | "stop_exercise";
+  jointAffected: string;       // e.g., "left_knee", "right_shoulder"
 }
 ```
 
-**Worker Thread Architecture:**
+**Exercise Monitoring Architecture (MediaPipe + Rules):**
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                 PHYSIO VIDEO PROCESSING                      │
+│              PHYSIO EXERCISE MONITORING                      │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
 │  WebSocket Handler (async, non-blocking)                     │
 │  └── Receives frames at 15-30 FPS                           │
 │      │                                                       │
 │      ▼                                                       │
-│  Frame Queue (ThreadPoolExecutor)                            │
-│  └── Distributes to worker threads                          │
+│  MediaPipe Pose Estimation                                   │
+│  └── Extracts 33 body landmarks per frame                   │
 │      │                                                       │
-│      ├──► Thread 1: MediaPipe Pose Estimation               │
-│      │    └── Extracts 33 body landmarks                    │
-│      │                                                       │
-│      ├──► Thread 2: Gait Metrics Calculator                 │
-│      │    └── Stride, cadence, speed from landmarks         │
-│      │                                                       │
-│      └──► Thread 3: Fall Risk Inference (TensorFlow)        │
-│           └── LSTM model predicts risk score                │
+│      ▼                                                       │
+│  Rule-Based Analysis (No ML Models)                          │
+│  ├── Joint Angle Calculator                                 │
+│  │   └── Compute angles: shoulder, elbow, hip, knee, ankle  │
+│  │                                                          │
+│  ├── Form Validator                                          │
+│  │   └── Compare angles to target range for exercise        │
+│  │   └── Score form quality (0-100)                         │
+│  │                                                          │
+│  ├── Rep Counter                                             │
+│  │   └── Detect up/down phases based on angle thresholds    │
+│  │                                                          │
+│  └── Pain Indicator Detector                                 │
+│      └── Detect shaking (landmark jitter analysis)          │
+│      └── Detect slowing (velocity decrease)                 │
+│      └── Detect range reduction (ROM comparison)            │
 │                                                              │
-│  Results aggregated → Sent back via WebSocket                │
+│  Results sent back via WebSocket in real-time                │
 │                                                              │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -126,44 +129,47 @@ interface TUGResultMessage {
 
 | Screen | File | Description |
 |--------|------|-------------|
-| `PhysioHomeScreen` | `physio_home_screen.dart` | Dashboard with recent sessions, risk score, quick actions |
-| `GaitAnalysisScreen` | `gait_analysis_screen.dart` | Live camera gait analysis with real-time feedback |
-| `TUGTestScreen` | `tug_test_screen.dart` | Guided TUG test with timer and instructions |
-| `ExerciseLibraryScreen` | `exercise_library_screen.dart` | Browse prescribed and general exercises |
-| `ExerciseSessionScreen` | `exercise_session_screen.dart` | Active exercise with pose guidance |
+| `PhysioHomeScreen` | `physio_home_screen.dart` | Dashboard with prescribed exercises, recent sessions, progress |
+| `ExerciseLibraryScreen` | `exercise_library_screen.dart` | Browse prescribed and general exercises by category |
+| `ExerciseSessionScreen` | `exercise_session_screen.dart` | Active exercise with real-time pose guidance and rep counting |
+| `ExerciseDetailScreen` | `exercise_detail_screen.dart` | Exercise instructions, video demo, target joints |
+| `PhysioProgressScreen` | `physio_progress_screen.dart` | Progress charts, session history, form improvement |
 | `PhysioReportScreen` | `physio_report_screen.dart` | View/export progress reports |
 
 #### Custom Widgets
 
 | Widget | File | Props | Description |
 |--------|------|-------|-------------|
-| `CameraStreamWidget` | `camera_stream_widget.dart` | `onFrame`, `analysisType`, `wsEndpoint` | **WebSocket** video capture & streaming to backend |
+| `CameraStreamWidget` | `camera_stream_widget.dart` | `onFrame`, `exerciseType`, `wsEndpoint` | **WebSocket** video capture & streaming to backend |
 | `PoseOverlayWidget` | `pose_overlay_widget.dart` | `landmarks`, `connections`, `highlightJoints` | Draws MediaPipe skeleton on camera preview |
-| `GaitMetricsCard` | `gait_metrics_card.dart` | `strideLength`, `cadence`, `speed`, `symmetry` | Real-time gait metrics display |
-| `FallRiskIndicator` | `fall_risk_indicator.dart` | `riskScore`, `riskLevel`, `factors` | Circular gauge showing fall risk (0-100) |
+| `ExerciseMetricsCard` | `exercise_metrics_card.dart` | `repCount`, `formScore`, `targetAngle`, `currentAngle` | Real-time exercise metrics display |
+| `RepCounterWidget` | `rep_counter_widget.dart` | `count`, `target`, `onComplete` | Circular rep counter with progress |
+| `FormScoreIndicator` | `form_score_indicator.dart` | `score`, `feedback` | Real-time form quality gauge (0-100) |
+| `PainAlertWidget` | `pain_alert_widget.dart` | `indicatorType`, `recommendation` | Pain indicator warning with suggestions |
 | `ExerciseCard` | `exercise_card.dart` | `exercise`, `onStart`, `onDetails` | Exercise tile with thumbnail, duration, difficulty |
 | `ProgressChart` | `progress_chart.dart` | `dataPoints`, `metricType`, `dateRange` | Line/bar chart for progress visualization |
-| `TUGTimerWidget` | `tug_timer_widget.dart` | `onComplete`, `autoDetect` | Timer with phase detection for TUG test |
 | `JointAngleDisplay` | `joint_angle_display.dart` | `jointName`, `currentAngle`, `targetAngle` | Real-time joint angle feedback |
 
-#### Widget Hierarchy (Gait Analysis Screen)
+#### Widget Hierarchy (Exercise Session Screen)
 
 ```
-GaitAnalysisScreen
-├── AppBar (title: "Gait Analysis")
+ExerciseSessionScreen
+├── AppBar (title: "Exercise Session")
 ├── Stack
 │   ├── CameraStreamWidget          ← WebSocket connection
 │   │   └── connects to: /ws/physio/stream/{userId}
 │   └── PoseOverlayWidget           ← Skeleton overlay
 │       └── receives: landmarks from WebSocket
 ├── Positioned (bottom panel)
-│   └── GaitMetricsCard             ← Real-time metrics
-│       ├── strideLength
-│       ├── cadence  
-│       ├── speed
-│       └── symmetryIndex
+│   └── ExerciseMetricsCard         ← Real-time metrics
+│       ├── repCount
+│       ├── formScore  
+│       ├── currentAngle
+│       └── targetAngle
+├── Positioned (top-right)
+│   └── PainAlertWidget             ← Shows if pain detected
 └── FloatingActionButton
-    └── Start/Stop Analysis
+    └── Start/Stop Exercise
 ```
 
 ---
@@ -299,11 +305,11 @@ FoodScannerScreen
 
 ---
 
-## 3. Madhushani - Guardian Service (Real-time Safety Monitoring)
+## 3. Madhushani - Guardian Service (Real-time Safety Monitoring & Mobility Analysis)
 
 ### Overview
 
-Real-time elderly safety monitoring system with fall detection, activity recognition, and emergency alerts. Uses **MediaPipe Pose** combined with **LSTM neural networks** for fall detection, and provides live video streaming to caregivers via **WebSocket**. 
+Real-time elderly safety monitoring system with fall detection, activity recognition (ADL), gait analysis, TUG test assessment, and emergency alerts. Uses **SlowFast** neural network for video-based action recognition combined with **MediaPipe Pose** for skeletal tracking, and **CNN+LSTM** for fall detection and gait pattern classification. Provides live video streaming to caregivers via **WebSocket**.
 
 > ⚠️ **Note**: For university demonstration, uses pre-recorded videos simulating live CCTV feeds.
 
@@ -317,6 +323,10 @@ Real-time elderly safety monitoring system with fall detection, activity recogni
 | `GET` | `/api/guardian/elderly/{elderly_id}/status` | Get current status | - | Status (active, inactive, alert) |
 | `GET` | `/api/guardian/elderly/{elderly_id}/location` | Get current location | - | GPS coordinates, zone |
 | `GET` | `/api/guardian/elderly/{elderly_id}/vitals` | Get latest vital signs | - | Heart rate, SpO2, etc. |
+| `POST` | `/api/guardian/analyze-gait` | Analyze gait from uploaded video | `multipart/form-data: video file` | Gait metrics, abnormality score |
+| `POST` | `/api/guardian/tug-test` | Process TUG (Timed Up and Go) test | `multipart/form-data: video file` | TUG score, time, fall risk |
+| `GET` | `/api/guardian/fall-risk/{elderly_id}` | Get current fall risk score | - | Risk score (0-100), factors |
+| `GET` | `/api/guardian/gait-history/{elderly_id}` | Get gait analysis history | Query: `start_date`, `end_date` | Gait metrics over time |
 | `POST` | `/api/guardian/fall-alert` | Report fall detection event | `{elderly_id, confidence, fall_type, location}` | Alert record |
 | `POST` | `/api/guardian/sos` | Trigger SOS emergency | `{elderly_id, location, message}` | SOS acknowledgment |
 | `GET` | `/api/guardian/alerts/{guardian_id}` | Get all alerts for guardian | Query: `status`, `priority`, `limit` | Alert list |
@@ -470,12 +480,15 @@ interface SOSMessage {
 
 | Screen | File | Description |
 |--------|------|-------------|
-| `GuardianHomeScreen` | `guardian_home_screen.dart` | Dashboard with elderly status cards, recent alerts |
+| `GuardianHomeScreen` | `guardian_home_screen.dart` | Dashboard with elderly status cards, recent alerts, fall risk |
 | `LiveMonitorScreen` | `live_monitor_screen.dart` | Real-time video monitoring with activity overlay |
+| `GaitAnalysisScreen` | `gait_analysis_screen.dart` | Live camera gait analysis with SlowFast inference |
+| `TUGTestScreen` | `tug_test_screen.dart` | Guided TUG test with timer and fall risk assessment |
 | `AlertsScreen` | `alerts_screen.dart` | Alert history with filtering and response actions |
-| `ActivityLogScreen` | `activity_log_screen.dart` | Timeline of daily activities |
+| `ActivityLogScreen` | `activity_log_screen.dart` | Timeline of daily activities (ADL recognition) |
 | `GeofenceScreen` | `geofence_screen.dart` | Map-based geofence management |
 | `EmergencyScreen` | `emergency_screen.dart` | Emergency contact, SOS response view |
+| `FallRiskReportScreen` | `fall_risk_report_screen.dart` | Detailed fall risk analysis with gait history |
 | `ElderlyProfileScreen` | `elderly_profile_screen.dart` | Elderly person's profile, settings, devices |
 
 #### Custom Widgets
@@ -485,6 +498,9 @@ interface SOSMessage {
 | `LiveFeedWidget` | `live_feed_widget.dart` | `elderlyId`, `wsEndpoint`, `showOverlay` | **WebSocket** live video stream from monitoring source |
 | `AlertCard` | `alert_card.dart` | `alert`, `onAcknowledge`, `onExpand` | Alert tile with priority, timestamp, actions |
 | `SOSButton` | `sos_button.dart` | `onTrigger`, `confirmationRequired` | Large emergency SOS button |
+| `GaitMetricsCard` | `gait_metrics_card.dart` | `strideLength`, `cadence`, `speed`, `symmetry` | Real-time gait metrics display |
+| `FallRiskIndicator` | `fall_risk_indicator.dart` | `riskScore`, `riskLevel`, `factors` | Circular gauge showing fall risk (0-100) |
+| `TUGTimerWidget` | `tug_timer_widget.dart` | `onComplete`, `autoDetect` | Timer with phase detection for TUG test |
 | `ActivityTimeline` | `activity_timeline.dart` | `activities`, `date` | Vertical timeline of daily activities |
 | `LocationMapWidget` | `location_map_widget.dart` | `location`, `geofences`, `trackHistory` | Google Map with location & geofences |
 | `VitalSignsCard` | `vital_signs_card.dart` | `heartRate`, `spO2`, `lastUpdated` | Vital signs display (from wearable) |

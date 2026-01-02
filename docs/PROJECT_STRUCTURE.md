@@ -30,29 +30,29 @@ SmartCarePlus/
 │   │       ├── thread_pool.py       # Thread pool manager for CPU-bound tasks
 │   │       └── task_queue.py        # Background task queue (Redis-backed)
 │   │
-│   ├── 📁 physio_service/           # Neelaka - Physiotherapy Analysis Module
+│   ├── 📁 physio_service/           # Neelaka - Physiotherapy Exercise Monitoring Module
 │   │   ├── __init__.py
 │   │   ├── router.py                # FastAPI router with all physio endpoints
 │   │   ├── schemas.py               # Pydantic models for request/response
 │   │   ├── service.py               # Business logic layer
-│   │   ├── 📁 models/               # AI/ML Models
+│   │   ├── 📁 models/               # Rule-Based Analysis (No ML Models)
 │   │   │   ├── __init__.py
-│   │   │   ├── gait_analyzer.py     # MediaPipe + TensorFlow gait analysis
-│   │   │   ├── tug_test.py          # Timed Up and Go test processor
-│   │   │   ├── balance_scorer.py    # Balance assessment algorithms
-│   │   │   ├── fall_risk.py         # Fall risk prediction (Random Forest/XGBoost)
+│   │   │   ├── exercise_monitor.py  # MediaPipe + rules for exercise form
+│   │   │   ├── form_validator.py    # Form quality scoring (rule-based)
+│   │   │   ├── rep_counter.py       # Repetition counting algorithm
+│   │   │   ├── pain_detector.py     # Pain indicator detection (shaking, slowing)
 │   │   │   └── pose_estimator.py    # MediaPipe Pose landmark extractor
 │   │   ├── 📁 utils/
 │   │   │   ├── __init__.py
 │   │   │   ├── angle_calculator.py  # Joint angle computations
-│   │   │   ├── gait_metrics.py      # Stride length, cadence, speed metrics
+│   │   │   ├── exercise_rules.py    # Target angles for each exercise type
 │   │   │   └── video_utils.py       # Frame extraction, preprocessing
 │   │   ├── 📁 websocket/
 │   │   │   ├── __init__.py
-│   │   │   └── physio_stream.py     # Real-time video stream handler for physio analysis
+│   │   │   └── physio_stream.py     # Real-time exercise monitoring WebSocket
 │   │   └── 📁 data/
 │   │       ├── exercises.json       # Exercise library definitions
-│   │       └── risk_thresholds.json # Fall risk scoring thresholds
+│   │       └── exercise_targets.json # Target angles for each exercise
 │   │
 │   ├── 📁 nutrition_service/        # Kulasekara - Nutrition & Meal Planning Module
 │   │   ├── __init__.py
@@ -76,20 +76,24 @@ SmartCarePlus/
 │   │       ├── elderly_rda.json     # RDA values for 65+ age group
 │   │       └── interactions.json    # Drug-food interaction database
 │   │
-│   ├── 📁 guardian_service/         # Madhushani - Real-time Monitoring & Safety Module
+│   ├── 📁 guardian_service/         # Madhushani - Real-time Monitoring, Safety & Mobility Module
 │   │   ├── __init__.py
 │   │   ├── router.py                # FastAPI router with guardian endpoints
 │   │   ├── schemas.py               # Pydantic models
 │   │   ├── service.py               # Business logic layer
-│   │   ├── 📁 models/               # AI/ML Models
+│   │   ├── 📁 models/               # AI/ML Models (SlowFast + CNN+LSTM)
 │   │   │   ├── __init__.py
-│   │   │   ├── fall_detector.py     # Fall detection (LSTM + pose-based)
-│   │   │   ├── activity_recognizer.py # Activity classification model
+│   │   │   ├── slowfast_model.py    # SlowFast for action recognition
+│   │   │   ├── fall_detector.py     # Fall detection (CNN+LSTM + pose-based)
+│   │   │   ├── gait_analyzer.py     # Gait analysis with SlowFast/CNN
+│   │   │   ├── tug_test.py          # Timed Up and Go test processor
+│   │   │   ├── activity_recognizer.py # ADL classification model
 │   │   │   ├── anomaly_detector.py  # Behavioral anomaly detection (Isolation Forest)
 │   │   │   └── pose_tracker.py      # Real-time pose tracking
 │   │   ├── 📁 utils/
 │   │   │   ├── __init__.py
 │   │   │   ├── alert_manager.py     # Alert priority & notification logic
+│   │   │   ├── gait_metrics.py      # Stride length, cadence, speed metrics
 │   │   │   ├── geofence.py          # Geofencing utilities
 │   │   │   └── vital_parser.py      # Wearable vital signs parser
 │   │   ├── 📁 websocket/
@@ -98,6 +102,7 @@ SmartCarePlus/
 │   │   │   └── alert_socket.py      # Real-time alert broadcasting
 │   │   └── 📁 data/
 │   │       ├── activity_labels.json # Activity classification labels
+│   │       ├── gait_thresholds.json # Gait abnormality thresholds
 │   │       └── alert_templates.json # Alert message templates
 │   │
 │   ├── 📁 shared/                   # Shared Utilities Across Services
@@ -110,25 +115,30 @@ SmartCarePlus/
 │   │
 │   ├── 📁 ml_models/                # Pre-trained Model Weights
 │   │   ├── physio/
-│   │   │   ├── gait_lstm.h5         # Gait analysis LSTM model
-│   │   │   └── fall_risk_rf.pkl     # Fall risk Random Forest model
+│   │   │   └── (No ML models - uses MediaPipe + rules)
 │   │   ├── nutrition/
-│   │   │   └── food_classifier.h5   # Food image CNN model
+│   │   │   └── food_classifier.h5   # Food image CNN model (MobileNetV2)
 │   │   └── guardian/
-│   │       ├── fall_detector.h5     # Fall detection LSTM model
-│   │       └── activity_model.pkl   # Activity recognition model
+│   │       ├── slowfast_model.pth   # SlowFast action recognition model
+│   │       ├── fall_detector.h5     # Fall detection CNN+LSTM model
+│   │       ├── gait_classifier.pkl  # Gait pattern classifier
+│   │       ├── guardian_dataset.pkl # Processed ADL/Fall dataset
+│   │       ├── gait_dataset.pkl     # Processed gait/TUG dataset
+│   │       └── activity_model.pkl   # ADL recognition model
 │   │
 │   ├── 📁 tests/                    # Backend Tests
 │   │   ├── __init__.py
 │   │   ├── conftest.py              # Pytest fixtures
 │   │   ├── 📁 physio/
-│   │   │   ├── test_gait.py
-│   │   │   └── test_tug.py
+│   │   │   ├── test_exercise_monitor.py
+│   │   │   └── test_form_validator.py
 │   │   ├── 📁 nutrition/
 │   │   │   ├── test_food_classifier.py
 │   │   │   └── test_meal_plan.py
 │   │   └── 📁 guardian/
 │   │       ├── test_fall_detection.py
+│   │       ├── test_gait_analysis.py
+│   │       ├── test_tug_test.py
 │   │       └── test_websocket.py
 │   │
 │   ├── 📁 scripts/                  # Utility Scripts

@@ -2,11 +2,13 @@
 ///
 /// Owner: Devin
 /// Displays pre-recorded videos as simulated live CCTV feeds for demo
+/// Videos are now streamed from the backend for proper architecture
 
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../core/constants/colors.dart';
+import '../../core/services/api_service.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 
 class LiveMonitorScreen extends StatefulWidget {
@@ -24,16 +26,21 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
   Timer? _timestampTimer;
   String _currentTimestamp = '';
 
-  // Pre-recorded videos as simulated CCTV feeds (ML-test ready naming)
-  // Large videos (>10MB) excluded to avoid memory issues
+  // Camera feeds with video IDs that map to backend video endpoints
+  // Videos are served from: ${ApiConfig.baseUrl}/api/guardian/video/{video_id}
   final List<Map<String, dynamic>> _cameras = [
-    {'name': 'Living Room', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/walking_normal_1.mp4', 'scenario': 'Normal Walking'},
-    {'name': 'Bedroom', 'location': 'Upper Floor', 'status': 'Online', 'video': 'assets/videos/sitting_resting_1.mp4', 'scenario': 'Sitting/Resting'},
-    {'name': 'Kitchen', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/walking_slow_1.mp4', 'scenario': 'Slow Walking'},
-    {'name': 'Hallway', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/gait_normal_1.mp4', 'scenario': 'Normal Gait'},
-    {'name': 'Guest Room', 'location': 'Upper Floor', 'status': 'Online', 'video': 'assets/videos/lying_down_1.mp4', 'scenario': 'Lying Down'},
-    {'name': 'Study', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/standing_idle_1.mp4', 'scenario': 'Standing Idle'},
+    {'name': 'Living Room', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'walking_normal_1', 'scenario': 'Normal Walking'},
+    {'name': 'Bedroom', 'location': 'Upper Floor', 'status': 'Online', 'videoId': 'sitting_resting_1', 'scenario': 'Sitting/Resting'},
+    {'name': 'Kitchen', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'walking_slow_1', 'scenario': 'Slow Walking'},
+    {'name': 'Hallway', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'gait_normal_1', 'scenario': 'Normal Gait'},
+    {'name': 'Guest Room', 'location': 'Upper Floor', 'status': 'Online', 'videoId': 'lying_down_1', 'scenario': 'Lying Down'},
+    {'name': 'Study', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'standing_idle_1', 'scenario': 'Standing Idle'},
   ];
+  
+  /// Get the video URL from the backend
+  String _getVideoUrl(String videoId) {
+    return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
+  }
 
   @override
   void initState() {
@@ -60,9 +67,11 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
     try {
       _videoController?.dispose();
       
-      // For demo: Use asset video. In production, would be network stream
-      final videoPath = _cameras[_selectedCameraIndex]['video'];
-      _videoController = VideoPlayerController.asset(videoPath);
+      // Stream video from backend API
+      final videoId = _cameras[_selectedCameraIndex]['videoId'];
+      final videoUrl = _getVideoUrl(videoId);
+      
+      _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
       
       await _videoController!.initialize();
       _videoController!.setLooping(true);
@@ -70,7 +79,8 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
       
       setState(() => _isLoading = false);
     } catch (e) {
-      // If video asset not found, show placeholder
+      // If video stream fails, show placeholder
+      debugPrint('Video initialization error: $e');
       setState(() {
         _isLoading = false;
         _hasError = true;

@@ -96,6 +96,6 @@ secrets.yaml
 *.swp
 *~
 
-*.mp4
+
 *.pdf
 # End of .gitignore
