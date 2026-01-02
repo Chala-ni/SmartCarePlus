@@ -7,18 +7,21 @@ for non-blocking video processing.
 """
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
+from starlette.middleware.base import BaseHTTPMiddleware
 
 # Service routers
 from physio_service.router import router as physio_router
 from nutrition_service.router import router as nutrition_router
 from guardian_service.router import router as guardian_router
 from core.users import router as users_router
+from core.connections import router as connections_router
 
 # Core utilities
 from core.config import settings
@@ -30,6 +33,41 @@ from shared.utils import setup_logger
 
 # Setup logging
 logger = setup_logger("smartcare.main")
+request_logger = setup_logger("smartcare.requests")
+
+
+# ============================================
+# Request Logging Middleware
+# ============================================
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Log all incoming requests and responses with timing."""
+    
+    async def dispatch(self, request: Request, call_next):
+        start_time = time.time()
+        
+        # Log request
+        client_ip = request.client.host if request.client else "unknown"
+        request_logger.info(f"➡️  {request.method} {request.url.path} from {client_ip}")
+        
+        # Process request
+        try:
+            response = await call_next(request)
+            
+            # Calculate processing time
+            process_time = (time.time() - start_time) * 1000
+            
+            # Log response
+            status_emoji = "✅" if response.status_code < 400 else "❌"
+            request_logger.info(
+                f"{status_emoji} {request.method} {request.url.path} → {response.status_code} ({process_time:.1f}ms)"
+            )
+            
+            return response
+        except Exception as e:
+            process_time = (time.time() - start_time) * 1000
+            request_logger.error(f"💥 {request.method} {request.url.path} → ERROR: {str(e)} ({process_time:.1f}ms)")
+            raise
 
 
 @asynccontextmanager
@@ -90,6 +128,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add request logging middleware
+app.add_middleware(RequestLoggingMiddleware)
+
 # Mount static files for media (local storage)
 media_path = Path(__file__).parent / "media"
 media_path.mkdir(exist_ok=True)
@@ -121,6 +162,7 @@ async def get_stats():
 
 # Include service routers
 app.include_router(users_router, prefix="/api/users", tags=["Users"])
+app.include_router(connections_router, prefix="/api/connections", tags=["Connections"])
 app.include_router(physio_router, prefix="/api/physio", tags=["Physio Service"])
 app.include_router(nutrition_router, prefix="/api/nutrition", tags=["Nutrition Service"])
 app.include_router(guardian_router, prefix="/api/guardian", tags=["Guardian Service"])

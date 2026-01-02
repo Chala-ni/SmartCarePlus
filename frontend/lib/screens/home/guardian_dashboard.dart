@@ -5,9 +5,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:video_player/video_player.dart';
+import 'dart:async';
 import '../../core/constants/colors.dart';
+import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/connection_provider.dart';
 
 class GuardianDashboard extends ConsumerStatefulWidget {
   const GuardianDashboard({super.key});
@@ -18,6 +22,10 @@ class GuardianDashboard extends ConsumerStatefulWidget {
 
 class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
   int _currentIndex = 0;
+
+  void _navigateToMonitor() {
+    setState(() => _currentIndex = 1);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,11 +40,11 @@ class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
         ),
         child: IndexedStack(
           index: _currentIndex,
-          children: const [
-            _GuardianHomeTab(),
-            _MonitorTab(),
-            _AlertsTab(),
-            _ElderlyListTab(),
+          children: [
+            _GuardianHomeTab(onNavigateToMonitor: _navigateToMonitor),
+            const _MonitorTab(),
+            const _AlertsTab(),
+            _ElderlyListTab(onNavigateToMonitor: _navigateToMonitor),
           ],
         ),
       ),
@@ -160,12 +168,15 @@ class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
 // ============= Guardian Home Tab =============
 
 class _GuardianHomeTab extends ConsumerWidget {
-  const _GuardianHomeTab();
+  final VoidCallback onNavigateToMonitor;
+  
+  const _GuardianHomeTab({required this.onNavigateToMonitor});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profile = ref.watch(userProfileProvider);
-    final userName = profile?.name ?? 'Guardian';
+    final fullName = profile?.name ?? 'Guardian';
+    final firstName = fullName.split(' ').first;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -177,28 +188,61 @@ class _GuardianHomeTab extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Guardian Dashboard',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Hello, $firstName',
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Row(
                   children: [
-                    const Text(
-                      'Guardian Dashboard',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
+                    // Connections Button
+                    GestureDetector(
+                      onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.link, color: AppColors.neonCyan, size: 22),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      'Hello, $userName',
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
+                    const SizedBox(width: 10),
+                    // Logout Button
+                    GestureDetector(
+                      onTap: () => _showLogoutDialog(context, ref),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.logout, color: AppColors.neonRed, size: 22),
                       ),
                     ),
+                    const SizedBox(width: 10),
+                    _buildProfileAvatar(),
                   ],
                 ),
-                _buildProfileAvatar(),
               ],
             ),
             
@@ -309,7 +353,7 @@ class _GuardianHomeTab extends ConsumerWidget {
                     icon: Icons.videocam,
                     label: 'Live\nMonitor',
                     color: AppColors.neonCyan,
-                    onTap: () {},
+                    onTap: onNavigateToMonitor,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -532,7 +576,7 @@ class _GuardianHomeTab extends ConsumerWidget {
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
-              onPressed: () {},
+              onPressed: onNavigateToMonitor,
               icon: Icon(Icons.videocam, size: 16, color: color),
               label: Text('Watch', style: TextStyle(color: color, fontSize: 12)),
               style: OutlinedButton.styleFrom(
@@ -540,6 +584,38 @@ class _GuardianHomeTab extends ConsumerWidget {
                 padding: const EdgeInsets.symmetric(vertical: 6),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showLogoutDialog(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Logout', style: TextStyle(color: AppColors.textPrimary)),
+        content: const Text('Are you sure you want to logout?', style: TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              await ref.read(authProvider.notifier).signOut();
+              if (context.mounted) {
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  AppRoutes.login,
+                  (route) => false,
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonRed),
+            child: const Text('Logout', style: TextStyle(color: Colors.white)),
           ),
         ],
       ),
@@ -642,8 +718,113 @@ class _GuardianHomeTab extends ConsumerWidget {
 
 // ============= Monitor Tab =============
 
-class _MonitorTab extends StatelessWidget {
+class _MonitorTab extends StatefulWidget {
   const _MonitorTab();
+
+  @override
+  State<_MonitorTab> createState() => _MonitorTabState();
+}
+
+class _MonitorTabState extends State<_MonitorTab> {
+  VideoPlayerController? _videoController;
+  bool _isPlaying = false;
+  bool _isLoading = false;
+  String? _selectedElderly;
+  String _currentActivity = 'N/A';
+  String _confidence = 'N/A';
+  String _fallRisk = 'N/A';
+  Timer? _timestampTimer;
+  String _currentTimestamp = '';
+
+  // Map elderly to their assigned camera feeds
+  final Map<String, Map<String, dynamic>> _elderlyFeeds = {
+    'Margaret': {
+      'video': 'assets/videos/walking_normal_1.mp4',
+      'activity': 'Walking',
+      'confidence': '94%',
+      'fallRisk': 'Low',
+      'location': 'Living Room',
+    },
+    'Robert': {
+      'video': 'assets/videos/sitting_resting_1.mp4',
+      'activity': 'Resting',
+      'confidence': '89%',
+      'fallRisk': 'Low',
+      'location': 'Bedroom',
+    },
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _updateTimestamp();
+    _timestampTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTimestamp());
+  }
+
+  void _updateTimestamp() {
+    final now = DateTime.now();
+    setState(() {
+      _currentTimestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+    });
+  }
+
+  @override
+  void dispose() {
+    _timestampTimer?.cancel();
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startWatching(String elderlyName) async {
+    final feed = _elderlyFeeds[elderlyName];
+    if (feed == null) return;
+
+    setState(() {
+      _isLoading = true;
+      _selectedElderly = elderlyName;
+    });
+
+    try {
+      // Dispose old controller
+      await _videoController?.dispose();
+      
+      // Initialize new video
+      _videoController = VideoPlayerController.asset(feed['video']);
+      await _videoController!.initialize();
+      _videoController!.setLooping(true);
+      await _videoController!.play();
+
+      setState(() {
+        _isPlaying = true;
+        _isLoading = false;
+        _currentActivity = feed['activity'];
+        _confidence = feed['confidence'];
+        _fallRisk = feed['fallRisk'];
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _isPlaying = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error loading video: $e')),
+        );
+      }
+    }
+  }
+
+  void _stopWatching() {
+    _videoController?.pause();
+    setState(() {
+      _isPlaying = false;
+      _selectedElderly = null;
+      _currentActivity = 'N/A';
+      _confidence = 'N/A';
+      _fallRisk = 'N/A';
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -665,9 +846,11 @@ class _MonitorTab extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Real-time elderly monitoring',
-                  style: TextStyle(
+                Text(
+                  _selectedElderly != null 
+                    ? 'Watching ${_selectedElderly} - ${_elderlyFeeds[_selectedElderly]?['location']}'
+                    : 'Real-time elderly monitoring',
+                  style: const TextStyle(
                     fontSize: 14,
                     color: AppColors.textSecondary,
                   ),
@@ -675,57 +858,152 @@ class _MonitorTab extends StatelessWidget {
                 
                 const SizedBox(height: 20),
                 
-                // Live Feed Placeholder
+                // Live Feed Container
                 Container(
                   height: 250,
                   decoration: BoxDecoration(
                     color: AppColors.surface,
                     borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.glassBorder),
+                    border: Border.all(
+                      color: _isPlaying ? AppColors.neonGreen : AppColors.glassBorder,
+                      width: _isPlaying ? 2 : 1,
+                    ),
                   ),
-                  child: Stack(
-                    children: [
-                      Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.videocam_off, size: 48, color: AppColors.textSecondary.withOpacity(0.5)),
-                            const SizedBox(height: 12),
-                            const Text(
-                              'Select an elderly to start monitoring',
-                              style: TextStyle(color: AppColors.textSecondary),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        // Video or Placeholder
+                        if (_isLoading)
+                          const Center(
+                            child: CircularProgressIndicator(color: AppColors.neonCyan),
+                          )
+                        else if (_isPlaying && _videoController != null && _videoController!.value.isInitialized)
+                          FittedBox(
+                            fit: BoxFit.cover,
+                            child: SizedBox(
+                              width: _videoController!.value.size.width,
+                              height: _videoController!.value.size.height,
+                              child: VideoPlayer(_videoController!),
                             ),
-                          ],
-                        ),
-                      ),
-                      // Live indicator
-                      Positioned(
-                        top: 12,
-                        left: 12,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                          decoration: BoxDecoration(
-                            color: AppColors.neonRed.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(Icons.circle, color: AppColors.neonRed, size: 8),
-                              SizedBox(width: 4),
-                              Text(
-                                'OFFLINE',
-                                style: TextStyle(
-                                  color: AppColors.neonRed,
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
+                          )
+                        else
+                          Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.videocam_off, size: 48, color: AppColors.textSecondary.withOpacity(0.5)),
+                                const SizedBox(height: 12),
+                                const Text(
+                                  'Select an elderly to start monitoring',
+                                  style: TextStyle(color: AppColors.textSecondary),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
+                          ),
+                        
+                        // Live/Offline indicator
+                        Positioned(
+                          top: 12,
+                          left: 12,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: _isPlaying 
+                                ? AppColors.neonGreen.withOpacity(0.2)
+                                : AppColors.neonRed.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.circle, 
+                                  color: _isPlaying ? AppColors.neonGreen : AppColors.neonRed, 
+                                  size: 8,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  _isPlaying ? 'LIVE' : 'OFFLINE',
+                                  style: TextStyle(
+                                    color: _isPlaying ? AppColors.neonGreen : AppColors.neonRed,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
-                    ],
+                        
+                        // Stop button when playing
+                        if (_isPlaying)
+                          Positioned(
+                            top: 12,
+                            right: 12,
+                            child: GestureDetector(
+                              onTap: _stopWatching,
+                              child: Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: Colors.black54,
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(Icons.close, color: Colors.white, size: 20),
+                              ),
+                            ),
+                          ),
+                        
+                        // Elderly name overlay when playing
+                        if (_isPlaying && _selectedElderly != null)
+                          Positioned(
+                            bottom: 12,
+                            left: 12,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                _selectedElderly!,
+                                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600),
+                              ),
+                            ),
+                          ),
+                        
+                        // Live timestamp overlay
+                        if (_isPlaying)
+                          Positioned(
+                            bottom: 12,
+                            right: 12,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.access_time, color: AppColors.neonCyan, size: 14),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _currentTimestamp,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontFamily: 'monospace',
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
                   ),
                 ),
                 
@@ -737,9 +1015,9 @@ class _MonitorTab extends StatelessWidget {
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      _buildOverlayInfo('Activity', 'N/A', Icons.directions_walk, AppColors.neonCyan),
-                      _buildOverlayInfo('Confidence', 'N/A', Icons.verified, AppColors.neonGreen),
-                      _buildOverlayInfo('Fall Risk', 'N/A', Icons.warning, AppColors.neonOrange),
+                      _buildOverlayInfo('Activity', _currentActivity, Icons.directions_walk, AppColors.neonCyan),
+                      _buildOverlayInfo('Confidence', _confidence, Icons.verified, AppColors.neonGreen),
+                      _buildOverlayInfo('Fall Risk', _fallRisk, Icons.warning, AppColors.neonOrange),
                     ],
                   ),
                 ),
@@ -771,7 +1049,7 @@ class _MonitorTab extends StatelessWidget {
                     child: ListView(
                       children: [
                         _buildElderlySelectCard('Margaret', 'Last active: 2 min ago', true),
-                        _buildElderlySelectCard('Robert', 'Last active: 15 min ago', false),
+                        _buildElderlySelectCard('Robert', 'Last active: 15 min ago', true),
                       ],
                     ),
                   ),
@@ -809,9 +1087,12 @@ class _MonitorTab extends StatelessWidget {
   }
 
   Widget _buildElderlySelectCard(String name, String lastActive, bool isOnline) {
+    final isSelected = _selectedElderly == name && _isPlaying;
+    
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: GlassmorphicCard(
+        glowColor: isSelected ? AppColors.neonGreen : null,
         padding: const EdgeInsets.all(12),
         child: Row(
           children: [
@@ -820,7 +1101,7 @@ class _MonitorTab extends StatelessWidget {
                 Container(
                   width: 45,
                   height: 45,
-                  decoration: BoxDecoration(
+                  decoration: const BoxDecoration(
                     color: AppColors.surfaceLight,
                     shape: BoxShape.circle,
                   ),
@@ -865,13 +1146,16 @@ class _MonitorTab extends StatelessWidget {
               ),
             ),
             ElevatedButton(
-              onPressed: () {},
+              onPressed: isOnline ? () => _startWatching(name) : null,
               style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.neonCyan,
+                backgroundColor: isSelected ? AppColors.neonGreen : AppColors.neonCyan,
                 foregroundColor: Colors.black,
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               ),
-              child: const Text('Watch', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+              child: Text(
+                isSelected ? 'Watching' : 'Watch', 
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+              ),
             ),
           ],
         ),
@@ -1167,11 +1451,35 @@ class _AlertsTab extends StatelessWidget {
 
 // ============= Elderly List Tab =============
 
-class _ElderlyListTab extends StatelessWidget {
-  const _ElderlyListTab();
+class _ElderlyListTab extends ConsumerStatefulWidget {
+  final VoidCallback onNavigateToMonitor;
+  
+  const _ElderlyListTab({required this.onNavigateToMonitor});
+
+  @override
+  ConsumerState<_ElderlyListTab> createState() => _ElderlyListTabState();
+}
+
+class _ElderlyListTabState extends ConsumerState<_ElderlyListTab> {
+  bool _hasLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Load connected elderly on init - only once
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasLoaded) {
+        _hasLoaded = true;
+        ref.read(connectionProvider.notifier).loadMyElderly();
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
+    final connectionState = ref.watch(connectionProvider);
+    final elderlyList = connectionState.myElderly;
+    
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -1189,20 +1497,25 @@ class _ElderlyListTab extends StatelessWidget {
                     color: AppColors.textPrimary,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.neonGreen.withOpacity(0.15),
-                    borderRadius: BorderRadius.circular(10),
+                GestureDetector(
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.neonGreen.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.add, color: AppColors.neonGreen),
                   ),
-                  child: const Icon(Icons.add, color: AppColors.neonGreen),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
-              '2 elderly under your care',
-              style: TextStyle(
+            Text(
+              elderlyList.isEmpty 
+                  ? 'No elderly connected yet'
+                  : '${elderlyList.length} elderly under your care',
+              style: const TextStyle(
                 fontSize: 14,
                 color: AppColors.textSecondary,
               ),
@@ -1210,41 +1523,94 @@ class _ElderlyListTab extends StatelessWidget {
             
             const SizedBox(height: 24),
             
-            // Elderly Cards
-            _buildElderlyProfileCard(
-              name: 'Margaret Johnson',
-              age: 78,
-              status: 'Active',
-              lastActivity: 'Walking',
-              fallRisk: 'Low',
-              healthScore: 85,
-              color: AppColors.neonGreen,
-            ),
-            const SizedBox(height: 16),
-            _buildElderlyProfileCard(
-              name: 'Robert Smith',
-              age: 82,
-              status: 'Resting',
-              lastActivity: 'Sitting',
-              fallRisk: 'Medium',
-              healthScore: 72,
-              color: AppColors.neonOrange,
-            ),
+            // Connected Elderly Cards
+            if (connectionState.isLoading)
+              const Center(child: CircularProgressIndicator())
+            else if (elderlyList.isEmpty)
+              _buildEmptyState()
+            else
+              ...elderlyList.map((elderly) => Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: _buildElderlyProfileCard(
+                  name: elderly.name,
+                  connectionType: elderly.connectionType,
+                  connectedAt: elderly.connectedAt,
+                  color: elderly.connectionType == 'guardian' 
+                      ? AppColors.neonGreen 
+                      : AppColors.neonOrange,
+                ),
+              )),
           ],
         ),
       ),
     );
   }
 
+  Widget _buildEmptyState() {
+    return GlassmorphicCard(
+      glowColor: AppColors.neonGreen,
+      glowIntensity: 0.1,
+      padding: const EdgeInsets.all(32),
+      child: Column(
+        children: [
+          Icon(
+            Icons.elderly_woman,
+            size: 64,
+            color: AppColors.textSecondary.withOpacity(0.5),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            'No Elderly Connected',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'Connect with elderly users by sharing your invite code or entering their code.',
+            style: TextStyle(
+              fontSize: 14,
+              color: AppColors.textSecondary,
+            ),
+            textAlign: TextAlign.center,
+          ),
+          const SizedBox(height: 20),
+          ElevatedButton.icon(
+            onPressed: () => Navigator.pushNamed(context, AppRoutes.connections),
+            icon: const Icon(Icons.add),
+            label: const Text('Add Connection'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.neonGreen,
+              foregroundColor: Colors.black,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildElderlyProfileCard({
     required String name,
-    required int age,
-    required String status,
-    required String lastActivity,
-    required String fallRisk,
-    required int healthScore,
+    required String connectionType,
+    required String connectedAt,
     required Color color,
   }) {
+    // Parse connection date
+    String connectionDate = 'Connected';
+    try {
+      final date = DateTime.parse(connectedAt);
+      final diff = DateTime.now().difference(date);
+      if (diff.inDays == 0) {
+        connectionDate = 'Connected today';
+      } else if (diff.inDays == 1) {
+        connectionDate = 'Connected yesterday';
+      } else {
+        connectionDate = 'Connected ${diff.inDays} days ago';
+      }
+    } catch (_) {}
+    
     return GlassmorphicCard(
       glowColor: color,
       glowIntensity: 0.15,
@@ -1279,7 +1645,7 @@ class _ElderlyListTab extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      '$age years old',
+                      connectionDate,
                       style: const TextStyle(
                         fontSize: 13,
                         color: AppColors.textSecondary,
@@ -1298,7 +1664,7 @@ class _ElderlyListTab extends StatelessWidget {
                         ),
                         const SizedBox(width: 6),
                         Text(
-                          status,
+                          connectionType == 'guardian' ? 'Guardian' : 'Caregiver',
                           style: TextStyle(
                             fontSize: 12,
                             color: color,
@@ -1310,28 +1676,20 @@ class _ElderlyListTab extends StatelessWidget {
                   ],
                 ),
               ),
-              // Health Score
-              SizedBox(
-                width: 50,
-                height: 50,
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    CircularProgressIndicator(
-                      value: healthScore / 100,
-                      strokeWidth: 4,
-                      backgroundColor: color.withOpacity(0.1),
-                      valueColor: AlwaysStoppedAnimation<Color>(color),
-                    ),
-                    Text(
-                      '$healthScore',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                        color: color,
-                      ),
-                    ),
-                  ],
+              // Connection type badge
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  connectionType == 'guardian' ? '👨‍👩‍👦 Family' : '👩‍⚕️ Care',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    color: color,
+                  ),
                 ),
               ),
             ],
@@ -1340,19 +1698,10 @@ class _ElderlyListTab extends StatelessWidget {
           const Divider(color: AppColors.glassBorder),
           const SizedBox(height: 12),
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildInfoColumn('Last Activity', lastActivity),
-              _buildInfoColumn('Fall Risk', fallRisk),
-              _buildInfoColumn('Alerts Today', '1'),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: () {},
+                  onPressed: widget.onNavigateToMonitor,
                   icon: const Icon(Icons.videocam, size: 18),
                   label: const Text('Watch'),
                   style: OutlinedButton.styleFrom(
@@ -1388,29 +1737,6 @@ class _ElderlyListTab extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildInfoColumn(String label, String value) {
-    return Column(
-      children: [
-        Text(
-          label,
-          style: const TextStyle(
-            fontSize: 11,
-            color: AppColors.textSecondary,
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: const TextStyle(
-            fontSize: 14,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
-          ),
-        ),
-      ],
     );
   }
 }

@@ -20,6 +20,7 @@ import '../../screens/guardian/guardian_home_screen.dart';
 import '../../screens/guardian/live_monitor_screen.dart';
 import '../../screens/guardian/alerts_screen.dart';
 import '../../screens/guardian/activity_log_screen.dart';
+import '../../screens/connections/connection_screen.dart';
 
 class AppRoutes {
   AppRoutes._();
@@ -29,6 +30,7 @@ class AppRoutes {
   static const String login = '/login';
   static const String register = '/register';
   static const String dashboard = '/dashboard';
+  static const String connections = '/connections';
   
   // Physio routes
   static const String physioHome = '/physio';
@@ -96,6 +98,10 @@ class AppRoutes {
         return _slideRoute(const AlertsScreen(), settings);
       case activityLog:
         return _slideRoute(const ActivityLogScreen(), settings);
+      
+      // Connections route
+      case connections:
+        return _slideRoute(const ConnectionScreen(), settings);
       
       default:
         return _fadeRoute(

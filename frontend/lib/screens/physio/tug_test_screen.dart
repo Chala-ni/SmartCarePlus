@@ -4,23 +4,28 @@
 /// Timed Up and Go test with guided instructions and timer
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
 import '../../core/constants/colors.dart';
+import '../../core/services/api_service.dart';
+import '../../providers/auth_provider.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 
-class TUGTestScreen extends StatefulWidget {
+class TUGTestScreen extends ConsumerStatefulWidget {
   const TUGTestScreen({super.key});
 
   @override
-  State<TUGTestScreen> createState() => _TUGTestScreenState();
+  ConsumerState<TUGTestScreen> createState() => _TUGTestScreenState();
 }
 
-class _TUGTestScreenState extends State<TUGTestScreen> {
+class _TUGTestScreenState extends ConsumerState<TUGTestScreen> {
   TestPhase _phase = TestPhase.ready;
   Timer? _timer;
   int _elapsedMilliseconds = 0;
   double? _finalTime;
   String? _riskLevel;
+  bool _isSaving = false;
+  Map<String, dynamic>? _analysisResult;
 
   @override
   void dispose() {
@@ -34,6 +39,7 @@ class _TUGTestScreenState extends State<TUGTestScreen> {
       _elapsedMilliseconds = 0;
       _finalTime = null;
       _riskLevel = null;
+      _analysisResult = null;
     });
 
     _timer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
@@ -43,26 +49,79 @@ class _TUGTestScreenState extends State<TUGTestScreen> {
     });
   }
 
-  void _stopTest() {
+  Future<void> _stopTest() async {
     _timer?.cancel();
     final time = _elapsedMilliseconds / 1000;
     
-    String risk;
-    if (time < 10) {
-      risk = 'Low';
-    } else if (time < 20) {
-      risk = 'Moderate';
-    } else if (time < 30) {
-      risk = 'High';
-    } else {
-      risk = 'Very High';
-    }
-
     setState(() {
-      _phase = TestPhase.completed;
       _finalTime = time;
-      _riskLevel = risk;
+      _isSaving = true;
     });
+    
+    // Submit to backend
+    await _submitTUGResult(time);
+  }
+  
+  Future<void> _submitTUGResult(double timeSeconds) async {
+    try {
+      final api = ref.read(apiServiceProvider);
+      final userId = ref.read(currentUserProvider)?.uid ?? 'demo_user';
+      
+      final response = await api.post('/api/physio/tug-test', body: {
+        'user_id': userId,
+        'time_seconds': timeSeconds,
+        'test_date': DateTime.now().toIso8601String(),
+      });
+      
+      if (response.success && response.data != null) {
+        final data = response.data;
+        setState(() {
+          _riskLevel = data['risk_level'] ?? _calculateLocalRisk(timeSeconds);
+          _analysisResult = {
+            'score': data['score'] ?? (100 - timeSeconds * 3).clamp(0, 100),
+            'percentile': data['percentile'] ?? 65,
+            'recommendation': data['recommendation'] ?? 'Continue regular exercises',
+          };
+          _phase = TestPhase.completed;
+        });
+      } else {
+        // Use local calculation
+        setState(() {
+          _riskLevel = _calculateLocalRisk(timeSeconds);
+          _analysisResult = {
+            'score': (100 - timeSeconds * 3).clamp(0, 100).toInt(),
+            'percentile': 65,
+            'recommendation': 'Continue regular exercises to maintain mobility',
+          };
+          _phase = TestPhase.completed;
+        });
+      }
+    } catch (e) {
+      // Use local calculation on error
+      setState(() {
+        _riskLevel = _calculateLocalRisk(timeSeconds);
+        _analysisResult = {
+          'score': (100 - timeSeconds * 3).clamp(0, 100).toInt(),
+          'percentile': 65,
+          'recommendation': 'Continue regular exercises to maintain mobility',
+        };
+        _phase = TestPhase.completed;
+      });
+    } finally {
+      setState(() => _isSaving = false);
+    }
+  }
+  
+  String _calculateLocalRisk(double time) {
+    if (time < 10) {
+      return 'Low';
+    } else if (time < 20) {
+      return 'Moderate';
+    } else if (time < 30) {
+      return 'High';
+    } else {
+      return 'Very High';
+    }
   }
 
   void _resetTest() {
@@ -71,6 +130,7 @@ class _TUGTestScreenState extends State<TUGTestScreen> {
       _elapsedMilliseconds = 0;
       _finalTime = null;
       _riskLevel = null;
+      _analysisResult = null;
     });
   }
 

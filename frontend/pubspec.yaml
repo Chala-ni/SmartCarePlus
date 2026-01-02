@@ -74,6 +74,7 @@ flutter:
     - assets/images/
     - assets/icons/
     - assets/animations/
+    - assets/videos/
 
   # NOTE: Using google_fonts package for Orbitron and Exo2 fonts
   # No local font files needed - fonts are downloaded at runtime

@@ -5,9 +5,13 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:video_player/video_player.dart';
+import 'dart:async';
 import '../../core/constants/colors.dart';
+import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/connection_provider.dart';
 
 class CaregiverDashboard extends ConsumerStatefulWidget {
   const CaregiverDashboard({super.key});
@@ -18,6 +22,10 @@ class CaregiverDashboard extends ConsumerStatefulWidget {
 
 class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
   int _currentIndex = 0;
+
+  void _navigateToPatients() {
+    setState(() => _currentIndex = 1);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -32,11 +40,11 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
         ),
         child: IndexedStack(
           index: _currentIndex,
-          children: const [
-            _CaregiverHomeTab(),
-            _PatientsTab(),
-            _TasksTab(),
-            _ReportsTab(),
+          children: [
+            _CaregiverHomeTab(onNavigateToPatients: _navigateToPatients),
+            const _PatientsTab(),
+            const _TasksTab(),
+            const _ReportsTab(),
           ],
         ),
       ),
@@ -160,12 +168,15 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
 // ============= Caregiver Home Tab =============
 
 class _CaregiverHomeTab extends ConsumerWidget {
-  const _CaregiverHomeTab();
+  final VoidCallback onNavigateToPatients;
+  
+  const _CaregiverHomeTab({required this.onNavigateToPatients});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final profile = ref.watch(userProfileProvider);
-    final userName = profile?.name ?? 'Caregiver';
+    final fullName = profile?.name ?? 'Caregiver';
+    final firstName = fullName.split(' ').first;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -177,28 +188,61 @@ class _CaregiverHomeTab extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Caregiver Dashboard',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        firstName,
+                        style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Row(
                   children: [
-                    const Text(
-                      'Caregiver Dashboard',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
+                    // Connections Button
+                    GestureDetector(
+                      onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.link, color: AppColors.neonCyan, size: 22),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      userName,
-                      style: const TextStyle(
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
+                    const SizedBox(width: 10),
+                    // Logout Button
+                    GestureDetector(
+                      onTap: () => _showLogoutDialog(context, ref),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.logout, color: AppColors.neonRed, size: 22),
                       ),
                     ),
+                    const SizedBox(width: 10),
+                    _buildProfileAvatar(),
                   ],
                 ),
-                _buildProfileAvatar(),
               ],
             ),
             
@@ -313,7 +357,7 @@ class _CaregiverHomeTab extends ConsumerWidget {
                     icon: Icons.videocam,
                     label: 'Check\nPatient',
                     color: AppColors.neonCyan,
-                    onTap: () {},
+                    onTap: onNavigateToPatients,
                   ),
                 ),
               ],
@@ -337,6 +381,38 @@ class _CaregiverHomeTab extends ConsumerWidget {
             _buildActivityLog('Fall risk assessment', 'Eleanor', '2 hours ago', AppColors.neonCyan),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showLogoutDialog(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Logout', style: TextStyle(color: AppColors.textPrimary)),
+        content: const Text('Are you sure you want to logout?', style: TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              await ref.read(authProvider.notifier).signOut();
+              if (context.mounted) {
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  AppRoutes.login,
+                  (route) => false,
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonRed),
+            child: const Text('Logout', style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
   }
@@ -608,11 +684,102 @@ class _CaregiverHomeTab extends ConsumerWidget {
 
 // ============= Patients Tab =============
 
-class _PatientsTab extends StatelessWidget {
+class _PatientsTab extends ConsumerStatefulWidget {
   const _PatientsTab();
 
   @override
+  ConsumerState<_PatientsTab> createState() => _PatientsTabState();
+}
+
+class _PatientsTabState extends ConsumerState<_PatientsTab> {
+  VideoPlayerController? _videoController;
+  bool _isWatching = false;
+  bool _isLoading = false;
+  String? _selectedPatient;
+  Timer? _timestampTimer;
+  String _currentTimestamp = '';
+  bool _hasLoadedElderly = false;
+
+  final Map<String, Map<String, dynamic>> _patientFeeds = {
+    'Margaret Johnson': {'video': 'assets/videos/walking_normal_1.mp4', 'activity': 'Walking', 'risk': 'Low'},
+    'Robert Smith': {'video': 'assets/videos/sitting_resting_1.mp4', 'activity': 'Resting', 'risk': 'Medium'},
+    'Eleanor Brown': {'video': 'assets/videos/walking_slow_1.mp4', 'activity': 'Walking', 'risk': 'Low'},
+    'James Wilson': {'video': 'assets/videos/lying_down_1.mp4', 'activity': 'Lying', 'risk': 'High'},
+    'Helen Davis': {'video': 'assets/videos/standing_idle_1.mp4', 'activity': 'Standing', 'risk': 'Low'},
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _updateTimestamp();
+    _timestampTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTimestamp());
+    // Load connected elderly - only once
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasLoadedElderly) {
+        _hasLoadedElderly = true;
+        ref.read(connectionProvider.notifier).loadMyElderly();
+      }
+    });
+  }
+
+  void _updateTimestamp() {
+    final now = DateTime.now();
+    if (mounted) {
+      setState(() {
+        _currentTimestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _timestampTimer?.cancel();
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startWatching(String patientName) async {
+    final feed = _patientFeeds[patientName];
+    if (feed == null) return;
+
+    setState(() {
+      _isLoading = true;
+      _selectedPatient = patientName;
+    });
+
+    try {
+      await _videoController?.dispose();
+      _videoController = VideoPlayerController.asset(feed['video']);
+      await _videoController!.initialize();
+      _videoController!.setLooping(true);
+      await _videoController!.play();
+
+      setState(() {
+        _isWatching = true;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _isWatching = false;
+      });
+    }
+  }
+
+  void _stopWatching() {
+    _videoController?.pause();
+    setState(() {
+      _isWatching = false;
+      _selectedPatient = null;
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final connectionState = ref.watch(connectionProvider);
+    final connectedElderly = connectionState.myElderly;
+    
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -630,28 +797,152 @@ class _PatientsTab extends StatelessWidget {
                     color: AppColors.textPrimary,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: AppColors.surfaceLight,
-                    borderRadius: BorderRadius.circular(10),
+                GestureDetector(
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.neonGreen.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.person_add, color: AppColors.neonGreen),
                   ),
-                  child: const Icon(Icons.search, color: AppColors.textSecondary),
                 ),
               ],
             ),
             const SizedBox(height: 8),
-            const Text(
-              '8 patients under your care',
-              style: TextStyle(
+            Text(
+              connectedElderly.isEmpty 
+                  ? 'No patients connected yet' 
+                  : '${connectedElderly.length} patient${connectedElderly.length == 1 ? '' : 's'} under your care',
+              style: const TextStyle(
                 fontSize: 14,
                 color: AppColors.textSecondary,
               ),
             ),
             
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             
-            // Patient Cards
+            // Video Feed Area (shows when watching)
+            if (_isWatching || _isLoading)
+              Container(
+                height: 200,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: AppColors.neonGreen, width: 2),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(14),
+                  child: Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      if (_isLoading)
+                        const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
+                      else if (_videoController != null && _videoController!.value.isInitialized)
+                        FittedBox(
+                          fit: BoxFit.cover,
+                          child: SizedBox(
+                            width: _videoController!.value.size.width,
+                            height: _videoController!.value.size.height,
+                            child: VideoPlayer(_videoController!),
+                          ),
+                        ),
+                      // LIVE indicator
+                      Positioned(
+                        top: 12,
+                        left: 12,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: AppColors.neonGreen.withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.circle, color: AppColors.neonGreen, size: 8),
+                              SizedBox(width: 4),
+                              Text('LIVE', style: TextStyle(color: AppColors.neonGreen, fontSize: 11, fontWeight: FontWeight.w600)),
+                            ],
+                          ),
+                        ),
+                      ),
+                      // Close button
+                      Positioned(
+                        top: 12,
+                        right: 12,
+                        child: GestureDetector(
+                          onTap: _stopWatching,
+                          child: Container(
+                            padding: const EdgeInsets.all(6),
+                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                            child: const Icon(Icons.close, color: Colors.white, size: 18),
+                          ),
+                        ),
+                      ),
+                      // Patient name & timestamp
+                      Positioned(
+                        bottom: 12,
+                        left: 12,
+                        right: 12,
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                              child: Text(_selectedPatient ?? '', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12)),
+                            ),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.access_time, color: AppColors.neonCyan, size: 12),
+                                  const SizedBox(width: 4),
+                                  Text(_currentTimestamp, style: const TextStyle(color: Colors.white, fontSize: 10, fontFamily: 'monospace')),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            
+            // Connected Elderly Cards (from API)
+            if (connectedElderly.isNotEmpty) ...[
+              const Text(
+                'Connected Patients',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.neonGreen,
+                ),
+              ),
+              const SizedBox(height: 12),
+              ...connectedElderly.map((elderly) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: _buildConnectedPatientCard(elderly.name, elderly.connectionType),
+              )),
+              const SizedBox(height: 16),
+              const Text(
+                'Demo Patients',
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textSecondary,
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            
+            // Demo Patient Cards
             _buildPatientCard('Margaret Johnson', 78, 'Low Risk', 'Active', AppColors.neonGreen),
             const SizedBox(height: 12),
             _buildPatientCard('Robert Smith', 82, 'Medium Risk', 'Resting', AppColors.neonOrange),
@@ -667,81 +958,154 @@ class _PatientsTab extends StatelessWidget {
     );
   }
 
-  Widget _buildPatientCard(String name, int age, String risk, String status, Color color) {
-    return GlassmorphicCard(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              shape: BoxShape.circle,
+  Widget _buildConnectedPatientCard(String name, String connectionType) {
+    return GestureDetector(
+      onTap: () => _startWatching(name),
+      child: GlassmorphicCard(
+        glowColor: AppColors.neonGreen,
+        glowIntensity: 0.2,
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: AppColors.neonGreen.withOpacity(0.15),
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.neonGreen, width: 2),
+              ),
+              child: const Icon(Icons.elderly, color: AppColors.neonGreen),
             ),
-            child: Icon(Icons.elderly, color: color),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: const TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                Row(
-                  children: [
-                    Text(
-                      '$age years • ',
-                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        risk,
-                        style: TextStyle(fontSize: 10, color: color),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
-            children: [
-              Row(
-                mainAxisSize: MainAxisSize.min,
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Container(
-                    width: 8,
-                    height: 8,
-                    decoration: BoxDecoration(
-                      color: color,
-                      shape: BoxShape.circle,
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
                     ),
                   ),
-                  const SizedBox(width: 4),
-                  Text(
-                    status,
-                    style: TextStyle(fontSize: 11, color: color),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppColors.neonGreen.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          '✓ Connected',
+                          style: TextStyle(fontSize: 10, color: AppColors.neonGreen),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-              const SizedBox(height: 4),
-              const Icon(Icons.chevron_right, color: AppColors.textSecondary),
-            ],
-          ),
-        ],
+            ),
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.neonGreen.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.videocam, color: AppColors.neonGreen, size: 20),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPatientCard(String name, int age, String risk, String status, Color color) {
+    final isSelected = _selectedPatient == name && _isWatching;
+    
+    return GestureDetector(
+      onTap: () => _startWatching(name),
+      child: GlassmorphicCard(
+        glowColor: isSelected ? AppColors.neonGreen : null,
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.elderly, color: color),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Text(
+                        '$age years • ',
+                        style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          risk,
+                          style: TextStyle(fontSize: 10, color: color),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: color,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      status,
+                      style: TextStyle(fontSize: 11, color: color),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Icon(
+                  isSelected ? Icons.videocam : Icons.chevron_right,
+                  color: isSelected ? AppColors.neonGreen : AppColors.textSecondary,
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }

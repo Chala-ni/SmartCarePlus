@@ -319,19 +319,187 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               
               // Google Sign In
               OutlinedButton.icon(
-                onPressed: () async {
-                  final authNotifier = ref.read(authProvider.notifier);
-                  final success = await authNotifier.signInWithGoogle();
-                  
-                  if (success && mounted) {
-                    Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
-                  }
-                },
+                onPressed: () => _handleGoogleSignIn(),
                 icon: const Icon(Icons.g_mobiledata, size: 28),
                 label: const Text('Continue with Google'),
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+  
+  Future<void> _handleGoogleSignIn() async {
+    final authNotifier = ref.read(authProvider.notifier);
+    final result = await authNotifier.signInWithGoogle();
+    
+    if (result == null) {
+      // Cancelled or error - do nothing, error is shown in UI
+      return;
+    }
+    
+    if (result == true && mounted) {
+      // Existing user with profile - go to dashboard
+      Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+    } else if (result == false && mounted) {
+      // New user - show role selection dialog
+      _showRoleSelectionDialog();
+    }
+  }
+  
+  void _showRoleSelectionDialog() {
+    UserRole? selectedRole;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Column(
+            children: [
+              Icon(Icons.person_add, color: AppColors.neonCyan, size: 48),
+              SizedBox(height: 16),
+              Text(
+                'Welcome!',
+                style: TextStyle(
+                  color: AppColors.textPrimary,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Choose your account type',
+                style: TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 14,
+                  fontWeight: FontWeight.normal,
+                ),
+              ),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildRoleOption(
+                role: UserRole.elderly,
+                icon: Icons.elderly,
+                title: 'Elderly',
+                description: 'I need care and monitoring',
+                isSelected: selectedRole == UserRole.elderly,
+                onTap: () => setDialogState(() => selectedRole = UserRole.elderly),
+              ),
+              const SizedBox(height: 12),
+              _buildRoleOption(
+                role: UserRole.guardian,
+                icon: Icons.shield,
+                title: 'Guardian',
+                description: 'I care for elderly family members',
+                isSelected: selectedRole == UserRole.guardian,
+                onTap: () => setDialogState(() => selectedRole = UserRole.guardian),
+              ),
+              const SizedBox(height: 12),
+              _buildRoleOption(
+                role: UserRole.caregiver,
+                icon: Icons.medical_services,
+                title: 'Caregiver',
+                description: 'I\'m a professional caregiver',
+                isSelected: selectedRole == UserRole.caregiver,
+                onTap: () => setDialogState(() => selectedRole = UserRole.caregiver),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(dialogContext);
+                // Sign out if they cancel
+                await ref.read(authProvider.notifier).signOut();
+              },
+              child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+            ),
+            ElevatedButton(
+              onPressed: selectedRole == null ? null : () async {
+                Navigator.pop(dialogContext);
+                final success = await ref.read(authProvider.notifier)
+                    .completeGoogleSignUp(role: selectedRole!);
+                if (success && mounted) {
+                  Navigator.pushReplacementNamed(context, AppRoutes.dashboard);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.neonCyan,
+                foregroundColor: AppColors.background,
+                disabledBackgroundColor: AppColors.surfaceLight,
+              ),
+              child: const Text('Continue'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildRoleOption({
+    required UserRole role,
+    required IconData icon,
+    required String title,
+    required String description,
+    required bool isSelected,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.neonCyan.withOpacity(0.15) : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? AppColors.neonCyan : AppColors.glassBorder,
+            width: isSelected ? 2 : 1,
+          ),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: isSelected ? AppColors.neonCyan.withOpacity(0.2) : AppColors.surface,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: isSelected ? AppColors.neonCyan : AppColors.textSecondary, size: 24),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      color: isSelected ? AppColors.neonCyan : AppColors.textPrimary,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 16,
+                    ),
+                  ),
+                  Text(
+                    description,
+                    style: TextStyle(
+                      color: AppColors.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (isSelected)
+              const Icon(Icons.check_circle, color: AppColors.neonCyan),
+          ],
         ),
       ),
     );

@@ -3,6 +3,7 @@
 /// Owner: Devin
 /// Displays pre-recorded videos as simulated live CCTV feeds for demo
 
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../../core/constants/colors.dart';
@@ -20,18 +21,34 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
   VideoPlayerController? _videoController;
   bool _isLoading = true;
   bool _hasError = false;
+  Timer? _timestampTimer;
+  String _currentTimestamp = '';
 
+  // Pre-recorded videos as simulated CCTV feeds (ML-test ready naming)
+  // Large videos (>10MB) excluded to avoid memory issues
   final List<Map<String, dynamic>> _cameras = [
-    {'name': 'Living Room', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/living_room.mp4'},
-    {'name': 'Bedroom', 'location': 'Upper Floor', 'status': 'Online', 'video': 'assets/videos/bedroom.mp4'},
-    {'name': 'Kitchen', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/kitchen.mp4'},
-    {'name': 'Hallway', 'location': 'Main Floor', 'status': 'Offline', 'video': 'assets/videos/hallway.mp4'},
+    {'name': 'Living Room', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/walking_normal_1.mp4', 'scenario': 'Normal Walking'},
+    {'name': 'Bedroom', 'location': 'Upper Floor', 'status': 'Online', 'video': 'assets/videos/sitting_resting_1.mp4', 'scenario': 'Sitting/Resting'},
+    {'name': 'Kitchen', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/walking_slow_1.mp4', 'scenario': 'Slow Walking'},
+    {'name': 'Hallway', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/gait_normal_1.mp4', 'scenario': 'Normal Gait'},
+    {'name': 'Guest Room', 'location': 'Upper Floor', 'status': 'Online', 'video': 'assets/videos/lying_down_1.mp4', 'scenario': 'Lying Down'},
+    {'name': 'Study', 'location': 'Main Floor', 'status': 'Online', 'video': 'assets/videos/standing_idle_1.mp4', 'scenario': 'Standing Idle'},
   ];
 
   @override
   void initState() {
     super.initState();
+    _updateTimestamp();
+    _timestampTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTimestamp());
     _initializeVideo();
+  }
+
+  void _updateTimestamp() {
+    final now = DateTime.now();
+    setState(() {
+      _currentTimestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+    });
   }
 
   Future<void> _initializeVideo() async {
@@ -63,6 +80,7 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
 
   @override
   void dispose() {
+    _timestampTimer?.cancel();
     _videoController?.dispose();
     super.dispose();
   }
@@ -158,16 +176,28 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
                         Positioned(
                           top: 12,
                           left: 12,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-                            child: Row(
-                              children: [
-                                Container(width: 8, height: 8, decoration: BoxDecoration(color: selectedCamera['status'] == 'Online' ? AppColors.neonGreen : AppColors.neonRed, shape: BoxShape.circle)),
-                                const SizedBox(width: 6),
-                                Text(selectedCamera['name'], style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                              ],
-                            ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+                                child: Row(
+                                  children: [
+                                    Container(width: 8, height: 8, decoration: BoxDecoration(color: selectedCamera['status'] == 'Online' ? AppColors.neonGreen : AppColors.neonRed, shape: BoxShape.circle)),
+                                    const SizedBox(width: 6),
+                                    Text(selectedCamera['name'], style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              // ML Scenario Tag
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(color: AppColors.neonCyan.withOpacity(0.8), borderRadius: BorderRadius.circular(4)),
+                                child: Text('ML: ${selectedCamera['scenario']}', style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
                           ),
                         ),
                         
@@ -176,11 +206,23 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
                           bottom: 12,
                           right: 12,
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(4)),
-                            child: Text(
-                              _getCurrentTimestamp(),
-                              style: const TextStyle(color: Colors.white, fontSize: 10, fontFamily: 'monospace'),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.access_time, color: AppColors.neonCyan, size: 14),
+                                const SizedBox(width: 6),
+                                Text(
+                                  _currentTimestamp,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 11,
+                                    fontFamily: 'monospace',
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         ),
@@ -275,11 +317,5 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
         ),
       ),
     );
-  }
-
-  String _getCurrentTimestamp() {
-    final now = DateTime.now();
-    return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-           '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
   }
 }

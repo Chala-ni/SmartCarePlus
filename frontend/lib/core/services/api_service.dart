@@ -8,6 +8,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../providers/auth_provider.dart';
+import '../../utils/logger.dart';
 
 /// API configuration
 class ApiConfig {
@@ -157,9 +158,14 @@ class ApiService {
     bool requireAuth = true,
     T Function(dynamic json)? fromJson,
   }) async {
+    final stopwatch = Stopwatch()..start();
+    AppLogger.api('POST', endpoint);
+    
     try {
       final headers = await _buildHeaders(requireAuth: requireAuth);
       final url = _buildUrl(endpoint, queryParams: queryParams);
+      
+      AppLogger.debug('POST $url', tag: 'HTTP');
       
       final response = await _client
           .post(
@@ -169,10 +175,19 @@ class ApiService {
           )
           .timeout(ApiConfig.timeout);
       
+      stopwatch.stop();
+      AppLogger.api('POST', endpoint, 
+          statusCode: response.statusCode, 
+          duration: stopwatch.elapsed);
+      
       return _handleResponse(response, fromJson);
-    } on SocketException {
+    } on SocketException catch (e) {
+      stopwatch.stop();
+      AppLogger.error('POST $endpoint SocketException: $e', tag: 'HTTP');
       return ApiResponse.error('No internet connection', 0);
     } catch (e) {
+      stopwatch.stop();
+      AppLogger.error('POST $endpoint Exception: $e', tag: 'HTTP');
       return ApiResponse.error('Request failed: $e', 0);
     }
   }

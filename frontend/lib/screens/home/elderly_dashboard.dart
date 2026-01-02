@@ -6,8 +6,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
+import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/connection_provider.dart';
 
 class ElderlyDashboard extends ConsumerStatefulWidget {
   const ElderlyDashboard({super.key});
@@ -124,13 +126,35 @@ class _ElderlyDashboardState extends ConsumerState<ElderlyDashboard> {
 
 // ============= Elderly Home Tab =============
 
-class _ElderlyHomeTab extends ConsumerWidget {
+class _ElderlyHomeTab extends ConsumerStatefulWidget {
   const _ElderlyHomeTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_ElderlyHomeTab> createState() => _ElderlyHomeTabState();
+}
+
+class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
+  bool _hasLoadedCaregivers = false;
+
+  @override
+  void initState() {
+    super.initState();
+    // Load caregivers only once
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasLoadedCaregivers) {
+        _hasLoadedCaregivers = true;
+        ref.read(connectionProvider.notifier).loadMyCaregivers();
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final profile = ref.watch(userProfileProvider);
-    final userName = profile?.name ?? 'Friend';
+    final connectionState = ref.watch(connectionProvider);
+    final myCaregivers = connectionState.myCaregivers;
+    final fullName = profile?.name ?? 'Friend';
+    final firstName = fullName.split(' ').first;
 
     return SafeArea(
       child: SingleChildScrollView(
@@ -142,28 +166,61 @@ class _ElderlyHomeTab extends ConsumerWidget {
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Good Day!',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        firstName,
+                        style: const TextStyle(
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                          color: AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                ),
+                Row(
                   children: [
-                    const Text(
-                      'Good Day!',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppColors.textSecondary,
+                    // My Caregivers Button
+                    GestureDetector(
+                      onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.people, color: AppColors.neonPurple, size: 22),
                       ),
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      userName,
-                      style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textPrimary,
+                    const SizedBox(width: 10),
+                    // Logout Button
+                    GestureDetector(
+                      onTap: () => _showLogoutDialog(context, ref),
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Icon(Icons.logout, color: AppColors.neonRed, size: 22),
                       ),
                     ),
+                    const SizedBox(width: 10),
+                    _buildProfileAvatar(),
                   ],
                 ),
-                _buildProfileAvatar(),
               ],
             ),
             
@@ -301,34 +358,227 @@ class _ElderlyHomeTab extends ConsumerWidget {
               children: [
                 Expanded(
                   child: _buildQuickAction(
+                    context: context,
                     icon: Icons.camera_alt,
                     label: 'Scan Food',
                     color: AppColors.neonOrange,
-                    onTap: () {},
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.foodScanner),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildQuickAction(
+                    context: context,
                     icon: Icons.videocam,
                     label: 'Start Exercise',
                     color: AppColors.neonGreen,
-                    onTap: () {},
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.gaitAnalysis),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildQuickAction(
+                    context: context,
                     icon: Icons.add,
                     label: 'Log Water',
                     color: AppColors.neonBlue,
-                    onTap: () {},
+                    onTap: () => _logWater(context),
                   ),
                 ),
               ],
             ),
+            
+            const SizedBox(height: 24),
+            
+            // My Caregivers Section
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'My Caregivers',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+                  child: Text(
+                    myCaregivers.isEmpty ? 'Add' : 'Manage',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      color: AppColors.neonCyan,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            
+            if (myCaregivers.isEmpty)
+              _buildNoCaregiverCard(context)
+            else
+              ...myCaregivers.map((caregiver) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _buildCaregiverCard(caregiver.name, caregiver.connectionType),
+              )),
           ],
         ),
+      ),
+    );
+  }
+  
+  Widget _buildNoCaregiverCard(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.pushNamed(context, AppRoutes.connections),
+      child: GlassmorphicCard(
+        glowColor: AppColors.neonPurple,
+        glowIntensity: 0.1,
+        padding: const EdgeInsets.all(20),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.neonPurple.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.person_add, color: AppColors.neonPurple, size: 24),
+            ),
+            const SizedBox(width: 16),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Connect with a Caregiver',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'Invite your guardian or caregiver to monitor your health',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.arrow_forward_ios, color: AppColors.textSecondary, size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildCaregiverCard(String name, String type) {
+    final isGuardian = type == 'guardian';
+    final color = isGuardian ? AppColors.neonGreen : AppColors.neonOrange;
+    
+    return GlassmorphicCard(
+      glowColor: color,
+      glowIntensity: 0.1,
+      padding: const EdgeInsets.all(14),
+      child: Row(
+        children: [
+          Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isGuardian ? Icons.family_restroom : Icons.medical_services,
+              color: color,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: color.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        isGuardian ? '👨‍👩‍👦 Guardian' : '👩‍⚕️ Caregiver',
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: color,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Text(
+                      '• Active',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: AppColors.neonGreen,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          Icon(Icons.check_circle, color: color, size: 20),
+        ],
+      ),
+    );
+  }
+
+  void _showLogoutDialog(BuildContext context, WidgetRef ref) {
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Logout', style: TextStyle(color: AppColors.textPrimary)),
+        content: const Text('Are you sure you want to logout?', style: TextStyle(color: AppColors.textSecondary)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              await ref.read(authProvider.notifier).signOut();
+              if (context.mounted) {
+                Navigator.of(context).pushNamedAndRemoveUntil(
+                  AppRoutes.login,
+                  (route) => false,
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonRed),
+            child: const Text('Logout', style: TextStyle(color: Colors.white)),
+          ),
+        ],
       ),
     );
   }
@@ -586,12 +836,14 @@ class _ElderlyHomeTab extends ConsumerWidget {
   }
 
   Widget _buildQuickAction({
+    required BuildContext context,
     required IconData icon,
     required String label,
     required Color color,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: GlassmorphicCard(
         glowColor: color,
@@ -618,6 +870,16 @@ class _ElderlyHomeTab extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+  
+  void _logWater(BuildContext context) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Water logged! 💧'),
+        backgroundColor: AppColors.neonBlue,
+        duration: Duration(seconds: 2),
       ),
     );
   }
@@ -1068,7 +1330,7 @@ class _MyNutritionTab extends StatelessWidget {
               color: AppColors.neonCyan,
             ),
             const SizedBox(height: 8),
-            _buildAddMealCard(),
+            _buildAddMealCard(context),
             
             const SizedBox(height: 24),
             
@@ -1077,28 +1339,31 @@ class _MyNutritionTab extends StatelessWidget {
               children: [
                 Expanded(
                   child: _buildNutritionAction(
+                    context: context,
                     icon: Icons.camera_alt,
                     label: 'Scan\nFood',
                     color: AppColors.neonOrange,
-                    onTap: () {},
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.foodScanner),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildNutritionAction(
+                    context: context,
                     icon: Icons.calendar_month,
                     label: 'Meal\nPlan',
                     color: AppColors.neonGreen,
-                    onTap: () {},
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.mealPlan),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildNutritionAction(
+                    context: context,
                     icon: Icons.bar_chart,
                     label: 'Weekly\nReport',
                     color: AppColors.neonPurple,
-                    onTap: () {},
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.nutritionHome),
                   ),
                 ),
               ],
@@ -1344,9 +1609,10 @@ class _MyNutritionTab extends StatelessWidget {
     );
   }
 
-  Widget _buildAddMealCard() {
+  Widget _buildAddMealCard(BuildContext context) {
     return GestureDetector(
-      onTap: () {},
+      behavior: HitTestBehavior.opaque,
+      onTap: () => Navigator.pushNamed(context, AppRoutes.foodScanner),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -1375,12 +1641,14 @@ class _MyNutritionTab extends StatelessWidget {
   }
 
   Widget _buildNutritionAction({
+    required BuildContext context,
     required IconData icon,
     required String label,
     required Color color,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
+      behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: GlassmorphicCard(
         glowColor: color,

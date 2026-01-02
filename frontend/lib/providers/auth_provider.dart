@@ -159,7 +159,8 @@ class AuthNotifier extends StateNotifier<AuthState> {
   }
 
   /// Sign in with Google
-  Future<bool> signInWithGoogle({UserRole defaultRole = UserRole.elderly}) async {
+  /// Returns: null if cancelled, true if existing user, false if new user (needs role selection)
+  Future<bool?> signInWithGoogle() async {
     state = state.copyWith(isLoading: true, error: null);
     
     try {
@@ -169,7 +170,7 @@ class AuthNotifier extends StateNotifier<AuthState> {
       if (googleUser == null) {
         // User cancelled the sign-in
         state = state.copyWith(isLoading: false);
-        return false;
+        return null;
       }
       
       // Obtain auth details from Google
@@ -195,32 +196,63 @@ class AuthNotifier extends StateNotifier<AuthState> {
           .get();
       
       if (!userDoc.exists) {
-        // New user - create profile in Firestore
-        await _firestore.collection('users').doc(userCredential.user!.uid).set({
-          'email': userCredential.user!.email ?? googleUser.email,
-          'name': userCredential.user!.displayName ?? googleUser.displayName ?? 'User',
-          'role': defaultRole.name,
-          'profile_image_url': userCredential.user!.photoURL ?? googleUser.photoUrl,
-          'auth_provider': 'google',
-          'created_at': DateTime.now().toIso8601String(),
-          'updated_at': DateTime.now().toIso8601String(),
-        });
+        // New user - DON'T create profile yet, let them choose role
+        state = AuthState(
+          firebaseUser: userCredential.user,
+          isLoading: false,
+        );
+        return false; // Indicates new user needs role selection
       }
       
-      // Load user profile
+      // Existing user - load profile
       await _loadUserProfile(userCredential.user!);
       
-      return true;
+      return true; // Indicates existing user with profile
     } on FirebaseAuthException catch (e) {
       state = state.copyWith(
         isLoading: false,
         error: _getAuthErrorMessage(e.code),
       );
-      return false;
+      return null;
     } catch (e) {
       state = state.copyWith(
         isLoading: false,
         error: 'Google sign-in failed: ${e.toString()}',
+      );
+      return null;
+    }
+  }
+  
+  /// Complete profile for new Google user
+  Future<bool> completeGoogleSignUp({required UserRole role}) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      state = state.copyWith(error: 'No authenticated user');
+      return false;
+    }
+    
+    state = state.copyWith(isLoading: true, error: null);
+    
+    try {
+      // Create profile in Firestore
+      await _firestore.collection('users').doc(user.uid).set({
+        'email': user.email ?? '',
+        'name': user.displayName ?? 'User',
+        'role': role.name,
+        'profile_image_url': user.photoURL,
+        'auth_provider': 'google',
+        'created_at': DateTime.now().toIso8601String(),
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+      
+      // Load user profile
+      await _loadUserProfile(user);
+      
+      return true;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Failed to create profile: $e',
       );
       return false;
     }
