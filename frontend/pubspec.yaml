@@ -33,7 +33,7 @@ dependencies:
   # Camera & Media
   camera: ^0.10.5+7
   image_picker: ^1.0.7
-  video_player: ^2.8.2
+  # video_player removed - using custom MJPEG streaming instead
 
   # ML Kit for Pose Detection
   google_mlkit_pose_detection: ^0.10.0

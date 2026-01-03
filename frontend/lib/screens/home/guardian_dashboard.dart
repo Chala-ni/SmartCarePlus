@@ -5,11 +5,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:video_player/video_player.dart';
 import 'dart:async';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
+import '../../core/services/api_service.dart';
 import '../../widgets/common/glassmorphic_card.dart';
+import '../../widgets/mjpeg_stream.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
 
@@ -729,33 +730,37 @@ class _MonitorTab extends StatefulWidget {
 }
 
 class _MonitorTabState extends State<_MonitorTab> {
-  VideoPlayerController? _videoController;
-  bool _isPlaying = false;
+  bool _isStreaming = false;
   bool _isLoading = false;
   String? _selectedElderly;
+  String _streamUrl = '';
   String _currentActivity = 'N/A';
   String _confidence = 'N/A';
   String _fallRisk = 'N/A';
   Timer? _timestampTimer;
   String _currentTimestamp = '';
 
-  // Map elderly to their assigned camera feeds
+  // Map elderly to their assigned camera feeds (now using backend video IDs)
   final Map<String, Map<String, dynamic>> _elderlyFeeds = {
     'Margaret': {
-      'video': 'assets/videos/walking_normal_1.mp4',
+      'videoId': 'walking_normal_1',
       'activity': 'Walking',
       'confidence': '94%',
       'fallRisk': 'Low',
       'location': 'Living Room',
     },
     'Robert': {
-      'video': 'assets/videos/sitting_resting_1.mp4',
+      'videoId': 'sitting_resting_1',
       'activity': 'Resting',
       'confidence': '89%',
       'fallRisk': 'Low',
       'location': 'Bedroom',
     },
   };
+  
+  String _getVideoUrl(String videoId) {
+    return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
+  }
 
   @override
   void initState() {
@@ -775,53 +780,33 @@ class _MonitorTabState extends State<_MonitorTab> {
   @override
   void dispose() {
     _timestampTimer?.cancel();
-    _videoController?.dispose();
     super.dispose();
   }
 
-  Future<void> _startWatching(String elderlyName) async {
+  void _startWatching(String elderlyName) {
     final feed = _elderlyFeeds[elderlyName];
     if (feed == null) return;
 
+    final videoUrl = _getVideoUrl(feed['videoId']);
+    
+    debugPrint('🎬 Guardian Monitor: Starting stream for $elderlyName');
+    debugPrint('🎬 Stream URL: $videoUrl');
+
     setState(() {
-      _isLoading = true;
       _selectedElderly = elderlyName;
+      _streamUrl = videoUrl;
+      _isStreaming = true;
+      _isLoading = false;
+      _currentActivity = feed['activity'];
+      _confidence = feed['confidence'];
+      _fallRisk = feed['fallRisk'];
     });
-
-    try {
-      // Dispose old controller
-      await _videoController?.dispose();
-      
-      // Initialize new video
-      _videoController = VideoPlayerController.asset(feed['video']);
-      await _videoController!.initialize();
-      _videoController!.setLooping(true);
-      await _videoController!.play();
-
-      setState(() {
-        _isPlaying = true;
-        _isLoading = false;
-        _currentActivity = feed['activity'];
-        _confidence = feed['confidence'];
-        _fallRisk = feed['fallRisk'];
-      });
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _isPlaying = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading video: $e')),
-        );
-      }
-    }
   }
 
   void _stopWatching() {
-    _videoController?.pause();
     setState(() {
-      _isPlaying = false;
+      _isStreaming = false;
+      _streamUrl = '';
       _selectedElderly = null;
       _currentActivity = 'N/A';
       _confidence = 'N/A';
@@ -868,8 +853,8 @@ class _MonitorTabState extends State<_MonitorTab> {
                     color: AppColors.surface,
                     borderRadius: BorderRadius.circular(16),
                     border: Border.all(
-                      color: _isPlaying ? AppColors.neonGreen : AppColors.glassBorder,
-                      width: _isPlaying ? 2 : 1,
+                      color: _isStreaming ? AppColors.neonGreen : AppColors.glassBorder,
+                      width: _isStreaming ? 2 : 1,
                     ),
                   ),
                   child: ClipRRect(
@@ -882,14 +867,17 @@ class _MonitorTabState extends State<_MonitorTab> {
                           const Center(
                             child: CircularProgressIndicator(color: AppColors.neonCyan),
                           )
-                        else if (_isPlaying && _videoController != null && _videoController!.value.isInitialized)
-                          FittedBox(
+                        else if (_isStreaming && _streamUrl.isNotEmpty)
+                          MjpegStream(
+                            streamUrl: _streamUrl,
+                            isLive: true,
                             fit: BoxFit.cover,
-                            child: SizedBox(
-                              width: _videoController!.value.size.width,
-                              height: _videoController!.value.size.height,
-                              child: VideoPlayer(_videoController!),
+                            loadingWidget: const Center(
+                              child: CircularProgressIndicator(color: AppColors.neonCyan),
                             ),
+                            onError: (error) {
+                              debugPrint('❌ Guardian Monitor Error: $error');
+                            },
                           )
                         else
                           Center(
@@ -913,7 +901,7 @@ class _MonitorTabState extends State<_MonitorTab> {
                           child: Container(
                             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
-                              color: _isPlaying 
+                              color: _isStreaming 
                                 ? AppColors.neonGreen.withOpacity(0.2)
                                 : AppColors.neonRed.withOpacity(0.2),
                               borderRadius: BorderRadius.circular(12),
@@ -923,14 +911,14 @@ class _MonitorTabState extends State<_MonitorTab> {
                               children: [
                                 Icon(
                                   Icons.circle, 
-                                  color: _isPlaying ? AppColors.neonGreen : AppColors.neonRed, 
+                                  color: _isStreaming ? AppColors.neonGreen : AppColors.neonRed, 
                                   size: 8,
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  _isPlaying ? 'LIVE' : 'OFFLINE',
+                                  _isStreaming ? 'LIVE' : 'OFFLINE',
                                   style: TextStyle(
-                                    color: _isPlaying ? AppColors.neonGreen : AppColors.neonRed,
+                                    color: _isStreaming ? AppColors.neonGreen : AppColors.neonRed,
                                     fontSize: 11,
                                     fontWeight: FontWeight.w600,
                                   ),
@@ -941,7 +929,7 @@ class _MonitorTabState extends State<_MonitorTab> {
                         ),
                         
                         // Stop button when playing
-                        if (_isPlaying)
+                        if (_isStreaming)
                           Positioned(
                             top: 12,
                             right: 12,
@@ -959,7 +947,7 @@ class _MonitorTabState extends State<_MonitorTab> {
                           ),
                         
                         // Elderly name overlay when playing
-                        if (_isPlaying && _selectedElderly != null)
+                        if (_isStreaming && _selectedElderly != null)
                           Positioned(
                             bottom: 12,
                             left: 12,
@@ -977,7 +965,7 @@ class _MonitorTabState extends State<_MonitorTab> {
                           ),
                         
                         // Live timestamp overlay
-                        if (_isPlaying)
+                        if (_isStreaming)
                           Positioned(
                             bottom: 12,
                             right: 12,
@@ -1090,7 +1078,7 @@ class _MonitorTabState extends State<_MonitorTab> {
   }
 
   Widget _buildElderlySelectCard(String name, String lastActive, bool isOnline) {
-    final isSelected = _selectedElderly == name && _isPlaying;
+    final isSelected = _selectedElderly == name && _isStreaming;
     
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),

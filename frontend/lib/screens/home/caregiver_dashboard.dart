@@ -5,12 +5,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:video_player/video_player.dart';
 import 'dart:async';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
 import '../../core/services/api_service.dart';
 import '../../widgets/common/glassmorphic_card.dart';
+import '../../widgets/mjpeg_stream.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
 
@@ -698,10 +698,10 @@ class _PatientsTab extends ConsumerStatefulWidget {
 }
 
 class _PatientsTabState extends ConsumerState<_PatientsTab> {
-  VideoPlayerController? _videoController;
-  bool _isWatching = false;
+  bool _isStreaming = false;
   bool _isLoading = false;
   String? _selectedPatient;
+  String _streamUrl = '';
   Timer? _timestampTimer;
   String _currentTimestamp = '';
   bool _hasLoadedElderly = false;
@@ -783,49 +783,32 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
   @override
   void dispose() {
     _timestampTimer?.cancel();
-    _videoController?.dispose();
     super.dispose();
   }
 
-  Future<void> _startWatching(String patientName) async {
+  void _startWatching(String patientName) {
     final connectionState = ref.read(connectionProvider);
     final feed = _getPatientFeed(patientName, connectionState.myElderly);
     if (feed == null) return;
 
+    final videoUrl = _getVideoUrl(feed['videoId']);
+    
+    debugPrint('🎬 Caregiver Monitor: Starting stream for $patientName');
+    debugPrint('🎬 Stream URL: $videoUrl');
+
     setState(() {
-      _isLoading = true;
       _selectedPatient = patientName;
       _currentVideoId = feed['videoId'];
+      _streamUrl = videoUrl;
+      _isStreaming = true;
+      _isLoading = false;
     });
-
-    try {
-      await _videoController?.dispose();
-      
-      // Stream video from backend API
-      final videoUrl = _getVideoUrl(feed['videoId']);
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
-      
-      await _videoController!.initialize();
-      _videoController!.setLooping(true);
-      await _videoController!.play();
-
-      setState(() {
-        _isWatching = true;
-        _isLoading = false;
-      });
-    } catch (e) {
-      debugPrint('Video initialization error: $e');
-      setState(() {
-        _isLoading = false;
-        _isWatching = false;
-      });
-    }
   }
 
   void _stopWatching() {
-    _videoController?.pause();
     setState(() {
-      _isWatching = false;
+      _isStreaming = false;
+      _streamUrl = '';
       _selectedPatient = null;
     });
   }
@@ -879,7 +862,7 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
             const SizedBox(height: 16),
             
             // Video Feed Area (shows when watching)
-            if (_isWatching || _isLoading)
+            if (_isStreaming || _isLoading)
               Container(
                 height: 200,
                 margin: const EdgeInsets.only(bottom: 16),
@@ -895,14 +878,17 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
                     children: [
                       if (_isLoading)
                         const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
-                      else if (_videoController != null && _videoController!.value.isInitialized)
-                        FittedBox(
+                      else if (_streamUrl.isNotEmpty)
+                        MjpegStream(
+                          streamUrl: _streamUrl,
+                          isLive: true,
                           fit: BoxFit.cover,
-                          child: SizedBox(
-                            width: _videoController!.value.size.width,
-                            height: _videoController!.value.size.height,
-                            child: VideoPlayer(_videoController!),
+                          loadingWidget: const Center(
+                            child: CircularProgressIndicator(color: AppColors.neonCyan),
                           ),
+                          onError: (error) {
+                            debugPrint('❌ Caregiver Monitor Error: $error');
+                          },
                         ),
                       // LIVE indicator
                       Positioned(
@@ -1078,7 +1064,7 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
   }
 
   Widget _buildPatientCard(String name, int age, String risk, String status, Color color) {
-    final isSelected = _selectedPatient == name && _isWatching;
+    final isSelected = _selectedPatient == name && _isStreaming;
     
     return GestureDetector(
       onTap: () => _startWatching(name),

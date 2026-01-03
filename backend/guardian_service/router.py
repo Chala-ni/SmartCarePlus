@@ -8,10 +8,11 @@ Uses pre-recorded videos simulated as live CCTV feeds for demo.
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
-from typing import Optional, List
+from typing import Optional, List, Generator
 from pydantic import BaseModel
 from datetime import datetime
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 import random
 import os
 import cv2
@@ -20,6 +21,8 @@ import base64
 import asyncio
 import logging
 import io
+import time
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +48,9 @@ from .models import (
 )
 
 router = APIRouter()
+
+# Thread pool for MJPEG streaming - isolated from main event loop
+mjpeg_thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mjpeg_worker")
 
 # Video files directory
 VIDEO_DIR = Path(__file__).parent.parent / "media" / "simulation_footage" / "guardian"
@@ -442,22 +448,125 @@ async def list_videos():
     }
 
 
-@router.get("/video/{video_id}")
-async def get_video(video_id: str, fallback: bool = True):
+def generate_mjpeg_frames(video_path: str) -> Generator[bytes, None, None]:
     """
-    Stream a pre-recorded video file for demo CCTV simulation.
+    Generator function that yields MJPEG frames from a video file.
+    Runs in a separate worker thread to avoid blocking the main event loop.
+    """
+    cap = None
+    try:
+        cap = cv2.VideoCapture(video_path)
+        
+        if not cap.isOpened():
+            logger.error(f"Cannot open video: {video_path}")
+            return
+        
+        logger.info(f"🎬 MJPEG stream started for: {video_path}")
+        frame_count = 0
+        
+        while True:
+            ret, frame = cap.read()
+            
+            # Loop video when it ends
+            if not ret:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                logger.debug(f"🔄 Video looped after {frame_count} frames")
+                frame_count = 0
+                continue
+            
+            frame_count += 1
+            
+            # Resize frame to save bandwidth (640x480)
+            frame = cv2.resize(frame, (640, 480))
+            
+            # Encode frame to JPEG
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            
+            if not ret:
+                continue
+            
+            frame_bytes = buffer.tobytes()
+            
+            # Yield frame in multipart format
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+            )
+            
+            # Control frame rate (~20 FPS) - prevents CPU overload
+            time.sleep(0.05)
+            
+    except GeneratorExit:
+        logger.info(f"🛑 MJPEG stream closed by client")
+    except Exception as e:
+        logger.error(f"[MJPEG Stream Error] {e}")
+    finally:
+        if cap is not None:
+            cap.release()
+            logger.info(f"🎬 MJPEG stream ended, video released")
+
+
+async def async_mjpeg_generator(video_path: str):
+    """
+    Async wrapper that runs the blocking MJPEG generator in a thread pool.
+    This prevents blocking the main asyncio event loop.
+    """
+    loop = asyncio.get_event_loop()
+    
+    # Create a queue for frame communication between threads
+    frame_queue = asyncio.Queue(maxsize=5)
+    stop_event = threading.Event()
+    
+    def producer():
+        """Runs in worker thread - produces frames"""
+        try:
+            for frame in generate_mjpeg_frames(video_path):
+                if stop_event.is_set():
+                    break
+                # Use thread-safe way to put frames
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        frame_queue.put(frame), loop
+                    ).result(timeout=1.0)
+                except Exception:
+                    break
+        except Exception as e:
+            logger.error(f"[Producer Error] {e}")
+        finally:
+            asyncio.run_coroutine_threadsafe(
+                frame_queue.put(None), loop  # Signal end
+            )
+    
+    # Start producer in thread pool
+    future = mjpeg_thread_pool.submit(producer)
+    
+    try:
+        while True:
+            frame = await frame_queue.get()
+            if frame is None:
+                break
+            yield frame
+    except asyncio.CancelledError:
+        logger.info("MJPEG stream cancelled")
+    finally:
+        stop_event.set()
+        future.cancel()
+
+
+@router.get("/video/{video_id}")
+async def get_video(video_id: str):
+    """
+    Stream a pre-recorded video as MJPEG for live CCTV simulation.
+    Uses worker thread pool to prevent blocking other API endpoints.
     
     Args:
         video_id: The ID of the video to stream
-        fallback: If True, return a placeholder/blank video instead of 404 when file missing
     """
-    start_time = time.time()
     logger.info(f"")
     logger.info(f"{'='*60}")
-    logger.info(f"🎥 VIDEO STREAM REQUEST")
+    logger.info(f"🎥 MJPEG STREAM REQUEST")
     logger.info(f"{'='*60}")
     logger.info(f"  🎬 Video ID: {video_id}")
-    logger.info(f"  🔄 Fallback: {fallback}")
     
     if video_id not in VIDEO_FILES:
         logger.warning(f"  ❌ Video ID not in catalog: {video_id}")
@@ -466,54 +575,25 @@ async def get_video(video_id: str, fallback: bool = True):
     
     video_path = VIDEO_DIR / VIDEO_FILES[video_id]
     logger.info(f"  📂 Full path: {video_path}")
-    logger.info(f"  📁 Video dir exists: {VIDEO_DIR.exists()}")
     
-    if _check_video_exists(video_path):
-        file_size = video_path.stat().st_size / (1024 * 1024)  # MB
-        logger.info(f"  ✅ File exists ({file_size:.2f} MB)")
-        logger.info(f"  📤 Streaming video: {video_path}")
-        elapsed = (time.time() - start_time) * 1000
-        logger.info(f"  ⏱️ Response time: {elapsed:.1f}ms")
-        logger.info(f"{'='*60}")
-        return FileResponse(
-            path=str(video_path),
-            media_type="video/mp4",
-            filename=VIDEO_FILES[video_id],
-            headers={
-                "Accept-Ranges": "bytes",
-                "Cache-Control": "no-cache",
-                "Access-Control-Allow-Origin": "*",
-            }
-        )
+    if not _check_video_exists(video_path):
+        logger.error(f"  ❌ Video file not found on disk: {video_path}")
+        raise HTTPException(status_code=404, detail=f"Video file not found: {video_path}")
     
-    logger.warning(f"  ⚠️ Video file not found on disk: {video_path}")
-    logger.warning(f"  ⚠️ Checking if directory exists: {VIDEO_DIR.exists()}")
-    if VIDEO_DIR.exists():
-        logger.warning(f"  ⚠️ Files in directory: {list(VIDEO_DIR.glob('*.mp4'))}")
+    file_size = video_path.stat().st_size / (1024 * 1024)  # MB
+    logger.info(f"  ✅ File exists ({file_size:.2f} MB)")
+    logger.info(f"  📤 Starting MJPEG stream...")
+    logger.info(f"{'='*60}")
     
-    # If fallback is enabled, return placeholder or blank video
-    if fallback:
-        logger.info(f"  🔄 Using fallback video")
-        fallback_content, media_type = _get_video_fallback()
-        elapsed = (time.time() - start_time) * 1000
-        logger.info(f"  ⏱️ Fallback response time: {elapsed:.1f}ms")
-        return Response(
-            content=fallback_content,
-            media_type=media_type,
-            headers={"X-Fallback": "true", "Access-Control-Allow-Origin": "*"}
-        )
-    
-    # Return proper 404 if no fallback requested
-    elapsed = (time.time() - start_time) * 1000
-    logger.error(f"  ❌ Returning 404 in {elapsed:.1f}ms")
-    raise HTTPException(
-        status_code=404,
-        detail={
-            "error": "Video file not found",
-            "video_id": video_id,
-            "expected_path": str(video_path),
-            "message": f"The video file '{VIDEO_FILES[video_id]}' does not exist on disk. "
-                       f"Ensure the media directory contains the required files."
+    return StreamingResponse(
+        async_mjpeg_generator(str(video_path)),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
         }
     )
 

@@ -3,17 +3,17 @@
 /// Owner: Devin
 /// Displays pre-recorded videos as simulated live CCTV feeds for demo
 /// Uses connected elderly from Firebase with randomly assigned demo videos
+/// Uses MJPEG streaming for reliable cross-platform video playback
 
 import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:video_player/video_player.dart';
-import 'package:http/http.dart' as http;
 import '../../core/constants/colors.dart';
 import '../../core/services/api_service.dart';
 import '../../providers/connection_provider.dart';
 import '../../widgets/common/glassmorphic_card.dart';
+import '../../widgets/mjpeg_stream.dart';
 
 /// Available demo video IDs with their scenarios
 const Map<String, String> demoVideos = {
@@ -36,13 +36,13 @@ class LiveMonitorScreen extends ConsumerStatefulWidget {
 
 class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
   ElderlyInfo? _selectedElderly;
-  VideoPlayerController? _videoController;
-  bool _isLoading = true;
+  bool _isStreaming = false;
   bool _hasError = false;
   String _errorMessage = '';
   Timer? _timestampTimer;
   String _currentTimestamp = '';
   String _currentVideoId = '';
+  String _streamUrl = '';
   
   // Activity analysis (simulated)
   String _currentActivity = 'N/A';
@@ -82,98 +82,49 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
     return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
   }
 
-  Future<void> _initializeVideo() async {
+  void _startStream() {
     if (_selectedElderly == null) return;
     
+    // Get video ID for this elderly
+    _currentVideoId = _selectedElderly!.assignedVideoId.isNotEmpty 
+        ? _selectedElderly!.assignedVideoId
+        : _getVideoIdForElderly(_selectedElderly!.id);
+    
+    final videoUrl = _getVideoUrl(_currentVideoId);
+    
+    debugPrint('');
+    debugPrint('🎬 ═══════════════════════════════════════════════════');
+    debugPrint('🎬 MJPEG STREAM STARTING');
+    debugPrint('🎬 ═══════════════════════════════════════════════════');
+    debugPrint('🎬 Video ID: $_currentVideoId');
+    debugPrint('🎬 Stream URL: $videoUrl');
+    debugPrint('🎬 Base URL: ${ApiConfig.baseUrl}');
+    debugPrint('🎬 ═══════════════════════════════════════════════════');
+    
     setState(() {
-      _isLoading = true;
+      _streamUrl = videoUrl;
+      _isStreaming = true;
       _hasError = false;
       _errorMessage = '';
     });
-
-    try {
-      _videoController?.dispose();
-      
-      // Get video ID for this elderly
-      _currentVideoId = _selectedElderly!.assignedVideoId.isNotEmpty 
-          ? _selectedElderly!.assignedVideoId
-          : _getVideoIdForElderly(_selectedElderly!.id);
-          
-      final videoUrl = _getVideoUrl(_currentVideoId);
-      debugPrint('');
-      debugPrint('🎬 ═══════════════════════════════════════════════════');
-      debugPrint('🎬 VIDEO LOADING');
-      debugPrint('🎬 ═══════════════════════════════════════════════════');
-      debugPrint('🎬 Video ID: $_currentVideoId');
-      debugPrint('🎬 Full URL: $videoUrl');
-      debugPrint('🎬 Base URL: ${ApiConfig.baseUrl}');
-      debugPrint('🎬 ═══════════════════════════════════════════════════');
-      
-      // Pre-flight connectivity test using HTTP
-      debugPrint('🔗 Testing server connectivity...');
-      try {
-        final testResponse = await http.head(
-          Uri.parse(videoUrl),
-        ).timeout(const Duration(seconds: 5));
-        debugPrint('🔗 ✅ Server reachable! Status: ${testResponse.statusCode}');
-        debugPrint('🔗 Content-Type: ${testResponse.headers['content-type']}');
-        debugPrint('🔗 Content-Length: ${testResponse.headers['content-length']}');
-      } catch (connectError) {
-        debugPrint('🔗 ❌ Connectivity test FAILED: $connectError');
-        debugPrint('🔗 ⚠️ This means the phone cannot reach the backend server.');
-        debugPrint('🔗 ⚠️ Check: 1) Windows Firewall allows port 8000');
-        debugPrint('🔗 ⚠️ Check: 2) Server running with --host 0.0.0.0');
-        debugPrint('🔗 ⚠️ Check: 3) IP address ${ApiConfig.baseUrl} is correct');
-        // Continue anyway to get the actual video player error
-      }
-      
-      _videoController = VideoPlayerController.networkUrl(
-        Uri.parse(videoUrl),
-        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
-      );
-      
-      // Add listener for errors
-      _videoController!.addListener(() {
-        if (_videoController!.value.hasError) {
-          debugPrint('❌ Video Player Error: ${_videoController!.value.errorDescription}');
-        }
-      });
-      
-      debugPrint('🎬 Initializing video controller...');
-      await _videoController!.initialize();
-      debugPrint('🎬 ✅ Video initialized successfully!');
-      debugPrint('🎬 Duration: ${_videoController!.value.duration}');
-      debugPrint('🎬 Size: ${_videoController!.value.size}');
-      
-      _videoController!.setLooping(true);
-      _videoController!.setVolume(0); // Mute for CCTV simulation
-      await _videoController!.play();
-      debugPrint('🎬 ▶️ Video playing');
-      
-      // Simulate ML analysis
-      _simulateActivity();
-      
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    } catch (e, stackTrace) {
-      debugPrint('');
-      debugPrint('❌ ═══════════════════════════════════════════════════');
-      debugPrint('❌ VIDEO ERROR');
-      debugPrint('❌ ═══════════════════════════════════════════════════');
-      debugPrint('❌ Error type: ${e.runtimeType}');
-      debugPrint('❌ Error: $e');
-      debugPrint('❌ Stack trace: $stackTrace');
-      debugPrint('❌ ═══════════════════════════════════════════════════');
-      
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _hasError = true;
-          _errorMessage = e.toString();
-        });
-      }
-    }
+    
+    // Simulate ML analysis
+    _simulateActivity();
+  }
+  
+  void _stopStream() {
+    setState(() {
+      _isStreaming = false;
+      _streamUrl = '';
+    });
+  }
+  
+  void _restartStream() {
+    debugPrint('🔄 Restarting MJPEG stream...');
+    _stopStream();
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) _startStream();
+    });
   }
   
   /// Simulate activity detection (will be replaced with real ML later)
@@ -192,14 +143,13 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
   @override
   void dispose() {
     _timestampTimer?.cancel();
-    _videoController?.dispose();
     super.dispose();
   }
 
   void _selectElderly(ElderlyInfo elderly) {
     if (_selectedElderly?.id != elderly.id) {
       setState(() => _selectedElderly = elderly);
-      _initializeVideo();
+      _startStream();
     }
   }
 
@@ -313,19 +263,40 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
             // Video or Placeholder
             if (_selectedElderly == null)
               _buildSelectElderlyPlaceholder()
-            else if (_isLoading)
-              const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
-            else if (_hasError || _videoController == null || !_videoController!.value.isInitialized)
+            else if (_hasError)
               _buildVideoPlaceholder()
-            else
-              FittedBox(
+            else if (_isStreaming && _streamUrl.isNotEmpty)
+              MjpegStream(
+                streamUrl: _streamUrl,
+                isLive: true,
                 fit: BoxFit.cover,
-                child: SizedBox(
-                  width: _videoController!.value.size.width,
-                  height: _videoController!.value.size.height,
-                  child: VideoPlayer(_videoController!),
+                timeout: const Duration(seconds: 10),
+                loadingWidget: const Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(color: AppColors.neonCyan),
+                      SizedBox(height: 12),
+                      Text('Connecting to stream...', 
+                        style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    ],
+                  ),
                 ),
-              ),
+                onError: (error) {
+                  debugPrint('❌ MJPEG Error: $error');
+                  WidgetsBinding.instance.addPostFrameCallback((_) {
+                    if (mounted) {
+                      setState(() {
+                        _hasError = true;
+                        _errorMessage = error.toString();
+                      });
+                    }
+                  });
+                },
+                errorBuilder: (context, error) => _buildVideoPlaceholder(),
+              )
+            else
+              _buildSelectElderlyPlaceholder(),
             
             // Overlay - Status Badge
             if (_selectedElderly != null)
@@ -429,7 +400,7 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
             ),
             const SizedBox(height: 12),
             TextButton.icon(
-              onPressed: _initializeVideo,
+              onPressed: _restartStream,
               icon: const Icon(Icons.refresh, size: 16),
               label: const Text('Retry'),
               style: TextButton.styleFrom(foregroundColor: AppColors.neonCyan),
