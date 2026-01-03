@@ -511,24 +511,29 @@ class _ConnectionScreenState extends ConsumerState<ConnectionScreen> {
           ...items.map((item) {
             if (isElderly) {
               final caregiver = item as CaregiverInfo;
+              // For elderly viewing their caregivers, show the caregiver's role
+              final displayType = caregiver.connectionType == 'guardian'
+                  ? 'guardian'
+                  : 'caregiver';
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _buildConnectionCard(
                   name: caregiver.name,
-                  type: caregiver.connectionType,
+                  type: displayType,
                   connectedAt: caregiver.connectedAt,
-                  color: caregiver.connectionType == 'guardian'
+                  color: displayType == 'guardian'
                       ? AppColors.neonPurple
                       : AppColors.neonGreen,
                 ),
               );
             } else {
               final elderly = item as ElderlyInfo;
+              // For guardians/caregivers viewing their elderly, always show "elderly"
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: _buildConnectionCard(
                   name: elderly.name,
-                  type: elderly.connectionType,
+                  type: 'elderly',
                   connectedAt: elderly.connectedAt,
                   color: AppColors.neonCyan,
                 ),
