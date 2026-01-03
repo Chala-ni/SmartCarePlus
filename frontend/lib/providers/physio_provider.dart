@@ -448,7 +448,7 @@ class PhysioNotifier extends StateNotifier<PhysioState> {
   /// Mark an exercise as completed
   Future<void> completeExercise(String scheduleId) async {
     try {
-      final response = await _api.post('/api/physio/schedule/$scheduleId/complete', {});
+      final response = await _api.post('/api/physio/schedule/$scheduleId/complete');
       if (response.success) {
         // Update local state
         final updated = state.todaySchedule.map((e) {
@@ -480,7 +480,7 @@ class PhysioNotifier extends StateNotifier<PhysioState> {
   /// Reschedule an exercise
   Future<void> rescheduleExercise(String scheduleId, DateTime newTime) async {
     try {
-      await _api.post('/api/physio/schedule/$scheduleId/reschedule', {
+      await _api.post('/api/physio/schedule/$scheduleId/reschedule', body: {
         'new_time': newTime.toIso8601String(),
       });
       // Update local state

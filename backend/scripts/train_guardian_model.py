@@ -21,11 +21,65 @@ import argparse
 import warnings
 from pathlib import Path
 from datetime import datetime
-from typing import Tuple, List, Dict, Optional
+from typing import Tuple, List, Dict, Optional, Generator
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DISABLE PROBLEMATIC OPTIMIZER (Must be set BEFORE importing TensorFlow)
+# This fixes the "Size of values 0 does not match size of permutation" error
+# ═══════════════════════════════════════════════════════════════════════════════
+os.environ['TF_ENABLE_LAYOUT_OPTIMIZER'] = '0'
+os.environ['TF_ENABLE_GRAPPLER_OPTIMIZERS'] = '0'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'  # Reduce TF logging
 
 import numpy as np
 import cv2
 import tensorflow as tf
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CRITICAL: Disable layout optimizer via TensorFlow config
+# This MUST happen right after importing TensorFlow
+# ═══════════════════════════════════════════════════════════════════════════════
+tf.config.optimizer.set_experimental_options({
+    'layout_optimizer': False,
+    'constant_folding': True,
+    'shape_optimization': True,
+    'remapping': True,
+    'arithmetic_optimization': True,
+    'dependency_optimization': True,
+    'loop_optimization': True,
+    'function_optimization': True,
+    'debug_stripper': True,
+})
+print("✅ TensorFlow layout optimizer disabled")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GPU SETUP (Run early, before model creation)
+# ═══════════════════════════════════════════════════════════════════════════════
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        print(f"✅ GPU memory growth enabled for {len(gpus)} GPU(s)")
+    except RuntimeError as e:
+        print(f"⚠️ GPU memory growth error: {e}")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PRE-DOWNLOAD PRETRAINED WEIGHTS (Before training starts)
+# ═══════════════════════════════════════════════════════════════════════════════
+print("📥 Pre-downloading EfficientNetV2-S weights...")
+try:
+    from tensorflow.keras.applications import EfficientNetV2S
+    _temp = EfficientNetV2S(include_top=False, weights='imagenet', 
+                            input_shape=(224, 224, 3), pooling='avg')
+    del _temp
+    import gc
+    gc.collect()
+    print("✅ EfficientNetV2-S weights cached successfully!")
+except Exception as e:
+    print(f"⚠️ Weight pre-download failed: {e}")
+    print("   Make sure Internet is enabled: Settings > Internet > On")
+
 from tensorflow.keras import layers, models, mixed_precision
 from tensorflow.keras.applications import EfficientNetV2S
 from sklearn.model_selection import train_test_split
@@ -41,6 +95,37 @@ warnings.filterwarnings('ignore')
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── KAGGLE NOTEBOOK CONFIG (Use this when running in Kaggle) ───
+# Set KAGGLE_MODE = True and update paths below, then call main() directly
+KAGGLE_MODE = True  # ⬅️ Set to True for Kaggle notebooks
+
+KAGGLE_CONFIG = {
+    # Paths - UPDATE THESE for your Kaggle dataset
+    "dataset_path": "/kaggle/input/smartcare-guardian-videos",  # ⬅️ UPDATE THIS
+    "model_save_path": "/kaggle/working",
+    "checkpoint_path": "/kaggle/working/checkpoints",
+    
+    # Video processing
+    "num_frames": 32,
+    "frame_height": 224,
+    "frame_width": 224,
+    "channels": 3,
+    
+    # Training - Optimized for P100 (16GB VRAM)
+    "batch_size": 2,  # ⬇️ REDUCED from 4 to 2 to prevent OOM in Phase 2
+    "epochs_phase1": 15,
+    "epochs_phase2": 30,
+    "learning_rate_phase1": 1e-3,
+    "learning_rate_phase2": 1e-5,
+    "weight_decay": 1e-5,
+    
+    # Data split
+    "test_split": 0.15,
+    "val_split": 0.15,
+    "random_seed": 42,
+}
+
 
 def get_config(args) -> dict:
     """Build configuration from command-line arguments."""
@@ -222,39 +307,154 @@ def apply_augmentation(frames: np.ndarray, training: bool = True) -> np.ndarray:
     return frames.astype(np.float32)
 
 
-def create_dataset(video_paths: List[str], labels: List[int], config: dict,
-                   training: bool = True) -> tf.data.Dataset:
-    """Create tf.data.Dataset for efficient data loading."""
+# ═══════════════════════════════════════════════════════════════════════════════
+# DATA SEQUENCE (More stable than raw generators for Keras)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class VideoDataSequence(tf.keras.utils.Sequence):
+    """
+    Keras Sequence for loading video batches.
     
-    def load_video_tf(video_path, label):
-        def _load(path, lbl):
-            path_str = path.numpy().decode('utf-8')
-            frames = load_video_frames(
-                path_str, config["num_frames"],
-                config["frame_height"], config["frame_width"]
-            )
-            if training:
-                frames = apply_augmentation(frames, training=True)
-            return frames.astype(np.float32), lbl.numpy()
+    This is more stable than raw generators or tf.py_function and avoids 
+    INVALID_ARGUMENT errors related to tensor shape mismatches in the 
+    TensorFlow graph optimizer.
+    
+    Using tf.keras.utils.Sequence provides:
+    - Proper shuffling at epoch end
+    - Guaranteed batch sizes
+    - Better memory management
+    - Thread-safe data loading
+    """
+    
+    def __init__(
+        self, 
+        video_paths: List[str], 
+        labels: List[int], 
+        config: dict, 
+        is_training: bool = True
+    ):
+        """
+        Initialize the video data sequence.
         
-        frames, lbl = tf.py_function(
-            _load, [video_path, label], [tf.float32, tf.int32]
-        )
-        frames.set_shape([config["num_frames"], config["frame_height"],
-                          config["frame_width"], config["channels"]])
-        lbl.set_shape([])
-        return frames, lbl
+        Args:
+            video_paths: List of video file paths
+            labels: List of integer labels
+            config: Configuration dictionary with batch_size, num_frames, etc.
+            is_training: Whether to shuffle and apply augmentation
+        """
+        self.video_paths = np.array(video_paths)
+        self.labels = np.array(labels, dtype=np.int32)
+        self.config = config
+        self.is_training = is_training
+        
+        self.batch_size = config["batch_size"]
+        self.num_frames = config["num_frames"]
+        self.height = config["frame_height"]
+        self.width = config["frame_width"]
+        
+        self.indices = np.arange(len(self.video_paths))
+        
+        if self.is_training:
+            np.random.shuffle(self.indices)
     
-    dataset = tf.data.Dataset.from_tensor_slices((video_paths, labels))
+    def __len__(self) -> int:
+        """Return number of batches per epoch."""
+        return len(self.video_paths) // self.batch_size
     
-    if training:
-        dataset = dataset.shuffle(buffer_size=len(video_paths), seed=config["random_seed"])
+    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Get batch at index `idx`.
+        
+        Args:
+            idx: Batch index
+            
+        Returns:
+            Tuple of (batch_frames, batch_labels) as NumPy arrays
+        """
+        # Get batch indices
+        start_idx = idx * self.batch_size
+        end_idx = start_idx + self.batch_size
+        batch_indices = self.indices[start_idx:end_idx]
+        
+        # Load batch data
+        batch_frames = []
+        batch_labels = []
+        
+        for i in batch_indices:
+            # Load video frames
+            frames = load_video_frames(
+                self.video_paths[i], 
+                self.num_frames, 
+                self.height, 
+                self.width
+            )
+            
+            # Validate frames shape
+            expected_shape = (self.num_frames, self.height, self.width, 3)
+            if frames.shape != expected_shape:
+                print(f"⚠️ Shape mismatch for {self.video_paths[i]}: {frames.shape} vs {expected_shape}")
+                frames = np.zeros(expected_shape, dtype=np.float32)
+            
+            # Apply augmentation if training
+            if self.is_training:
+                frames = apply_augmentation(frames, training=True)
+            
+            batch_frames.append(frames)
+            batch_labels.append(self.labels[i])
+        
+        # Stack into batch arrays with explicit dtype
+        batch_frames = np.stack(batch_frames, axis=0).astype(np.float32)
+        batch_labels = np.array(batch_labels, dtype=np.int32)
+        
+        return batch_frames, batch_labels
     
-    dataset = dataset.map(load_video_tf, num_parallel_calls=tf.data.AUTOTUNE)
-    dataset = dataset.batch(config["batch_size"])
-    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    def on_epoch_end(self):
+        """Shuffle indices at the end of each epoch if training."""
+        if self.is_training:
+            np.random.shuffle(self.indices)
+
+
+class EvaluationSequence(tf.keras.utils.Sequence):
+    """
+    Keras Sequence for evaluation (includes partial batches).
+    """
     
-    return dataset
+    def __init__(self, video_paths: List[str], labels: List[int], config: dict):
+        self.video_paths = np.array(video_paths)
+        self.labels = np.array(labels, dtype=np.int32)
+        self.config = config
+        
+        self.batch_size = config["batch_size"]
+        self.num_frames = config["num_frames"]
+        self.height = config["frame_height"]
+        self.width = config["frame_width"]
+    
+    def __len__(self) -> int:
+        """Return number of batches (including partial final batch)."""
+        return int(np.ceil(len(self.video_paths) / self.batch_size))
+    
+    def __getitem__(self, idx: int) -> Tuple[np.ndarray, np.ndarray]:
+        """Get batch at index `idx`."""
+        start_idx = idx * self.batch_size
+        end_idx = min(start_idx + self.batch_size, len(self.video_paths))
+        
+        batch_frames = []
+        batch_labels = []
+        
+        for i in range(start_idx, end_idx):
+            frames = load_video_frames(
+                self.video_paths[i], 
+                self.num_frames, 
+                self.height, 
+                self.width
+            )
+            batch_frames.append(frames)
+            batch_labels.append(self.labels[i])
+        
+        batch_frames = np.stack(batch_frames, axis=0).astype(np.float32)
+        batch_labels = np.array(batch_labels, dtype=np.int32)
+        
+        return batch_frames, batch_labels
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -287,13 +487,15 @@ def build_video_backbone(config: dict) -> models.Model:
     frame_features = layers.TimeDistributed(efficientnet, name="frame_encoder")(video_input)
     
     # Temporal modeling with Bidirectional LSTM
+    # NOTE: recurrent_dropout removed - it causes issues with mixed precision
+    # and can lead to shape inference errors with TimeDistributed
     x = layers.Bidirectional(
-        layers.LSTM(256, return_sequences=True, dropout=0.3, recurrent_dropout=0.2),
+        layers.LSTM(256, return_sequences=True, dropout=0.3),
         name="temporal_lstm_1"
     )(frame_features)
     
     x = layers.Bidirectional(
-        layers.LSTM(128, return_sequences=False, dropout=0.3, recurrent_dropout=0.2),
+        layers.LSTM(128, return_sequences=False, dropout=0.3),
         name="temporal_lstm_2"
     )(x)
     
@@ -336,9 +538,23 @@ def build_guardian_model(backbone: models.Model, num_classes: int,
 # TRAINING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def train_model(model, backbone, train_dataset, val_dataset, config, class_weights,
+def train_model(model, backbone, X_train, y_train, X_val, y_val, config, class_weights,
                 model_dir, timestamp):
-    """Two-phase training: frozen backbone → fine-tuning."""
+    """Two-phase training: frozen backbone → fine-tuning using Keras Sequence."""
+    
+    # Create data sequences (more stable than raw generators)
+    train_sequence = VideoDataSequence(X_train, y_train, config, is_training=True)
+    val_sequence = VideoDataSequence(X_val, y_val, config, is_training=False)
+    
+    steps_per_epoch = len(train_sequence)
+    validation_steps = len(val_sequence)
+    
+    print(f"\n📊 Training Setup:")
+    print(f"   Training samples: {len(X_train)}")
+    print(f"   Validation samples: {len(X_val)}")
+    print(f"   Batch size: {config['batch_size']}")
+    print(f"   Steps per epoch: {steps_per_epoch}")
+    print(f"   Validation steps: {validation_steps}")
     
     # ─── PHASE 1: Train Classification Head ───
     print("\n" + "=" * 70)
@@ -372,9 +588,11 @@ def train_model(model, backbone, train_dataset, val_dataset, config, class_weigh
     
     print(f"\n   Training for {config['epochs_phase1']} epochs...\n")
     history_phase1 = model.fit(
-        train_dataset, validation_data=val_dataset,
-        epochs=config["epochs_phase1"], callbacks=callbacks_phase1,
-        class_weight=class_weights, verbose=1
+        train_sequence,
+        validation_data=val_sequence,
+        epochs=config["epochs_phase1"],
+        callbacks=callbacks_phase1,
+        verbose=1
     )
     
     # ─── PHASE 2: Fine-tune Entire Model ───
@@ -406,16 +624,22 @@ def train_model(model, backbone, train_dataset, val_dataset, config, class_weigh
         )
     ]
     
+    # Create fresh sequences for Phase 2 (reset shuffle state)
+    train_sequence_p2 = VideoDataSequence(X_train, y_train, config, is_training=True)
+    val_sequence_p2 = VideoDataSequence(X_val, y_val, config, is_training=False)
+    
     initial_epoch = len(history_phase1.history['loss'])
     print(f"\n   Fine-tuning for {config['epochs_phase2']} epochs...\n")
     
     history_phase2 = model.fit(
-        train_dataset, validation_data=val_dataset,
+        train_sequence_p2,
+        validation_data=val_sequence_p2,
         epochs=initial_epoch + config["epochs_phase2"],
         initial_epoch=initial_epoch,
-        callbacks=callbacks_phase2, class_weight=class_weights, verbose=1
+        callbacks=callbacks_phase2,
+        verbose=1
     )
-    
+
     return history_phase1, history_phase2
 
 
@@ -423,22 +647,33 @@ def train_model(model, backbone, train_dataset, val_dataset, config, class_weigh
 # EVALUATION & VISUALIZATION
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def evaluate_model(model, test_dataset, class_names, model_dir, timestamp):
-    """Evaluate model and generate metrics."""
+def evaluate_model(model, X_test, y_test, config, class_names, model_dir, timestamp):
+    """Evaluate model and generate metrics using Keras Sequence."""
     print("\n🧪 Evaluating model on test set...")
-    test_loss, test_accuracy, test_top2 = model.evaluate(test_dataset, verbose=1)
+    
+    # Create evaluation sequence (includes partial batches)
+    test_sequence = EvaluationSequence(X_test, y_test, config)
+    
+    # Evaluate using the sequence
+    test_loss, test_accuracy, test_top2 = model.evaluate(
+        test_sequence,
+        verbose=1
+    )
     
     print(f"\n📊 Test Results:")
     print(f"   Loss:      {test_loss:.4f}")
     print(f"   Accuracy:  {test_accuracy:.4f} ({test_accuracy*100:.1f}%)")
     print(f"   Top-2 Acc: {test_top2:.4f} ({test_top2*100:.1f}%)")
     
-    # Get predictions
+    # Get predictions for confusion matrix
+    print("\n🔮 Generating predictions for confusion matrix...")
     y_true, y_pred = [], []
-    for videos, labels in test_dataset:
-        preds = model.predict(videos, verbose=0)
+    
+    for batch_idx in range(len(test_sequence)):
+        batch_frames, batch_labels = test_sequence[batch_idx]
+        preds = model.predict(batch_frames, verbose=0)
         y_pred.extend(np.argmax(preds, axis=1).tolist())
-        y_true.extend(labels.numpy().tolist())
+        y_true.extend(batch_labels.tolist())
     
     y_true, y_pred = np.array(y_true), np.array(y_pred)
     
@@ -581,8 +816,14 @@ def save_model(model, class_names, config, test_results, history1, history2,
 
 def main():
     """Main training pipeline."""
-    args = parse_args()
-    config = get_config(args)
+    
+    # Use KAGGLE_CONFIG if in Kaggle mode, otherwise parse CLI args
+    if KAGGLE_MODE:
+        print("🔶 Running in KAGGLE MODE")
+        config = KAGGLE_CONFIG.copy()
+    else:
+        args = parse_args()
+        config = get_config(args)
     
     # Setup
     print("\n" + "=" * 70)
@@ -593,15 +834,19 @@ def main():
     model_dir = Path(config["model_save_path"])
     model_dir.mkdir(parents=True, exist_ok=True)
     
-    # Set seeds
+    # Set seeds for reproducibility
     tf.random.set_seed(config["random_seed"])
     np.random.seed(config["random_seed"])
     random.seed(config["random_seed"])
     
-    # Mixed precision
-    if args.mixed_precision:
-        mixed_precision.set_global_policy('mixed_float16')
-        print("✅ Mixed precision (float16) enabled")
+    # ═══════════════════════════════════════════════════════════════════════════
+    # IMPORTANT: Mixed precision DISABLED for TimeDistributed + EfficientNetV2S
+    # The combination causes layout optimizer errors:
+    # "Size of values 0 does not match size of permutation 4"
+    # Training will be slightly slower but stable.
+    # ═══════════════════════════════════════════════════════════════════════════
+    use_mixed_precision = False  # Disabled to fix layout optimizer bug
+    print("⚠️ Mixed precision DISABLED (required for TimeDistributed + EfficientNet)")
     
     # GPU check
     gpus = tf.config.list_physical_devices('GPU')
@@ -630,7 +875,7 @@ def main():
         count = labels.count(idx)
         print(f"   • {name}: {count} ({100*count/len(labels):.1f}%)")
     
-    # Class weights
+    # Class weights for imbalanced data
     class_weight_values = compute_class_weight('balanced', classes=np.unique(labels), y=labels)
     class_weights = dict(enumerate(class_weight_values))
     
@@ -648,24 +893,19 @@ def main():
     print(f"\n📊 Data Split:")
     print(f"   Train: {len(X_train)} | Val: {len(X_val)} | Test: {len(X_test)}")
     
-    # Create datasets
-    train_dataset = create_dataset(X_train, y_train, config, training=True)
-    val_dataset = create_dataset(X_val, y_val, config, training=False)
-    test_dataset = create_dataset(X_test, y_test, config, training=False)
-    
     # ─── Build Model ───
     tf.keras.backend.clear_session()
     backbone = build_video_backbone(config)
     model = build_guardian_model(backbone, num_classes)
     
-    # ─── Train ───
+    # ─── Train using generators ───
     history1, history2 = train_model(
-        model, backbone, train_dataset, val_dataset, config,
+        model, backbone, X_train, y_train, X_val, y_val, config,
         class_weights, model_dir, timestamp
     )
     
-    # ─── Evaluate ───
-    test_results = evaluate_model(model, test_dataset, class_names, model_dir, timestamp)
+    # ─── Evaluate using generator ───
+    test_results = evaluate_model(model, X_test, y_test, config, class_names, model_dir, timestamp)
     plot_history(history1, history2, model_dir, timestamp)
     
     # ─── Save ───

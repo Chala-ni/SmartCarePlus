@@ -12,8 +12,29 @@ import '../../utils/logger.dart';
 
 /// API configuration
 class ApiConfig {
-  // Use localhost with adb reverse for physical device
-  static const String baseUrl = 'http://localhost:8000';
+  // Platform-specific base URL configuration
+  // 
+  // FOR PHYSICAL ANDROID DEVICE WITH USB:
+  // The video player (ExoPlayer) does NOT work with adb reverse.
+  // You MUST use the actual IP address of your laptop.
+  // 
+  // Steps:
+  // 1. Make sure phone and laptop are on same network (or use hotspot)
+  // 2. Find laptop IP: Get-NetIPAddress -AddressFamily IPv4
+  // 3. Update _serverIp below
+  // 4. Run backend with: uvicorn main:app --reload --port 8000 --host 0.0.0.0
+  
+  // ⚠️ UPDATE THIS TO YOUR LAPTOP'S IP ADDRESS
+  static const String _serverIp = '10.154.55.250';
+  
+  static String get baseUrl {
+    if (Platform.isAndroid) {
+      // Use actual IP for video streaming to work
+      return 'http://$_serverIp:8000';
+    }
+    return 'http://localhost:8000';
+  }
+  
   static const Duration timeout = Duration(seconds: 30);
   
   // Endpoints

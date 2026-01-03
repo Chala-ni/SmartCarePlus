@@ -240,7 +240,7 @@ class _GuardianHomeTab extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    _buildProfileAvatar(),
+                    _buildProfileAvatar(context),
                   ],
                 ),
               ],
@@ -391,23 +391,26 @@ class _GuardianHomeTab extends ConsumerWidget {
     );
   }
 
-  Widget _buildProfileAvatar() {
-    return Container(
-      width: 50,
-      height: 50,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: AppColors.neonPurple, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.neonPurple.withOpacity(0.3),
-            blurRadius: 10,
-          ),
-        ],
-      ),
-      child: const CircleAvatar(
-        backgroundColor: AppColors.surface,
-        child: Icon(Icons.person, color: AppColors.neonPurple),
+  Widget _buildProfileAvatar(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.pushNamed(context, Routes.guardianProfile),
+      child: Container(
+        width: 50,
+        height: 50,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.neonPurple, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.neonPurple.withOpacity(0.3),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: const CircleAvatar(
+          backgroundColor: AppColors.surface,
+          child: Icon(Icons.person, color: AppColors.neonPurple),
+        ),
       ),
     );
   }

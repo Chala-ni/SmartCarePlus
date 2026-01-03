@@ -330,6 +330,46 @@ class AuthNotifier extends StateNotifier<AuthState> {
     }
   }
 
+  /// Update user profile
+  Future<bool> updateProfile({
+    String? name,
+    String? phone,
+    Map<String, dynamic>? elderlyProfile,
+    Map<String, dynamic>? guardianProfile,
+  }) async {
+    final user = _auth.currentUser;
+    if (user == null) {
+      state = state.copyWith(error: 'No authenticated user');
+      return false;
+    }
+    
+    state = state.copyWith(isLoading: true, error: null);
+    
+    try {
+      final updates = <String, dynamic>{
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      
+      if (name != null) updates['name'] = name;
+      if (phone != null) updates['phone'] = phone;
+      if (elderlyProfile != null) updates['elderly_profile'] = elderlyProfile;
+      if (guardianProfile != null) updates['guardian_profile'] = guardianProfile;
+      
+      await _firestore.collection('users').doc(user.uid).update(updates);
+      
+      // Reload profile
+      await _loadUserProfile(user);
+      
+      return true;
+    } catch (e) {
+      state = state.copyWith(
+        isLoading: false,
+        error: 'Failed to update profile: $e',
+      );
+      return false;
+    }
+  }
+
   /// Get Firebase ID token for API calls
   Future<String?> getIdToken() async {
     return await _auth.currentUser?.getIdToken();

@@ -5,6 +5,8 @@ Verifies Firebase ID tokens for protected endpoints.
 """
 
 import logging
+import sys
+import time
 from typing import Optional
 from functools import wraps
 
@@ -14,8 +16,20 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from firebase_admin import auth
 from core.database import init_firebase, is_mock_mode
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# Configure detailed logging
+logger = logging.getLogger("smartcare.auth")
+logger.setLevel(logging.DEBUG)
+
+# Ensure handler if not present
+if not logger.handlers:
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 # HTTP Bearer scheme for token extraction
 security = HTTPBearer(auto_error=False)
@@ -78,16 +92,20 @@ async def verify_firebase_token(
         async def protected_route(user: AuthenticatedUser = Depends(verify_firebase_token)):
             return {"message": f"Hello {user.email}"}
     """
+    start_time = time.time()
+    logger.debug(f"🔐 Token verification started")
     # Initialize Firebase if not already done
     init_firebase()
     
     # Mock mode - return demo user
     if is_mock_mode():
-        logger.warning("🧪 Auth running in MOCK MODE - returning demo user")
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"🧪 MOCK MODE: Returning demo user (uid={MOCK_USER.uid}) in {elapsed:.1f}ms")
         return MOCK_USER
     
     # Check for credentials
     if credentials is None:
+        logger.warning(f"❌ No authorization header provided")
         raise HTTPException(
             status_code=401,
             detail="Missing authorization header",
@@ -95,10 +113,16 @@ async def verify_firebase_token(
         )
     
     token = credentials.credentials
+    token_preview = token[:20] + "..." if len(token) > 20 else token
+    logger.debug(f"🔑 Token received: {token_preview}")
     
     try:
         # Verify the token with Firebase
+        logger.debug(f"🔥 Verifying token with Firebase...")
+        verify_start = time.time()
         decoded_token = auth.verify_id_token(token)
+        verify_time = (time.time() - verify_start) * 1000
+        logger.debug(f"✅ Token verified in {verify_time:.1f}ms")
         
         # Extract user info
         user = AuthenticatedUser(

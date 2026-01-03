@@ -7,6 +7,7 @@ for non-blocking video processing.
 """
 
 import logging
+import sys
 import time
 from contextlib import asynccontextmanager
 
@@ -15,6 +16,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from starlette.middleware.base import BaseHTTPMiddleware
+
+# ============================================
+# Configure Root Logger First
+# ============================================
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
 
 # Service routers
 from physio_service.router import router as physio_router
@@ -32,8 +43,8 @@ from core.notifications import fcm_service
 from shared.utils import setup_logger
 
 # Setup logging
-logger = setup_logger("smartcare.main")
-request_logger = setup_logger("smartcare.requests")
+logger = setup_logger("smartcare.main", level=logging.DEBUG)
+request_logger = setup_logger("smartcare.requests", level=logging.DEBUG)
 
 
 # ============================================
@@ -46,9 +57,16 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         start_time = time.time()
         
-        # Log request
+        # Log request with more details
         client_ip = request.client.host if request.client else "unknown"
-        request_logger.info(f"➡️  {request.method} {request.url.path} from {client_ip}")
+        query_string = f"?{request.url.query}" if request.url.query else ""
+        auth_header = request.headers.get("Authorization", "")
+        has_auth = "🔐" if auth_header else "🔓"
+        
+        request_logger.info(f"")
+        request_logger.info(f"➡️  {has_auth} {request.method} {request.url.path}{query_string}")
+        request_logger.debug(f"    Client: {client_ip}")
+        request_logger.debug(f"    User-Agent: {request.headers.get('User-Agent', 'unknown')[:50]}")
         
         # Process request
         try:
@@ -57,8 +75,16 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # Calculate processing time
             process_time = (time.time() - start_time) * 1000
             
-            # Log response
-            status_emoji = "✅" if response.status_code < 400 else "❌"
+            # Log response with colors based on status
+            if response.status_code < 300:
+                status_emoji = "✅"
+            elif response.status_code < 400:
+                status_emoji = "↪️"
+            elif response.status_code < 500:
+                status_emoji = "⚠️"
+            else:
+                status_emoji = "❌"
+            
             request_logger.info(
                 f"{status_emoji} {request.method} {request.url.path} → {response.status_code} ({process_time:.1f}ms)"
             )
@@ -66,7 +92,9 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             return response
         except Exception as e:
             process_time = (time.time() - start_time) * 1000
-            request_logger.error(f"💥 {request.method} {request.url.path} → ERROR: {str(e)} ({process_time:.1f}ms)")
+            request_logger.error(f"💥 {request.method} {request.url.path} → ERROR: {type(e).__name__}: {str(e)} ({process_time:.1f}ms)")
+            import traceback
+            request_logger.error(traceback.format_exc())
             raise
 
 

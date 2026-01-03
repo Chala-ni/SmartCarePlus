@@ -22,6 +22,7 @@ import '../../screens/guardian/live_monitor_screen.dart';
 import '../../screens/guardian/alerts_screen.dart';
 import '../../screens/guardian/activity_log_screen.dart';
 import '../../screens/connections/connection_screen.dart';
+import '../../screens/profile/profile_screens.dart';
 
 class AppRoutes {
   AppRoutes._();
@@ -53,6 +54,11 @@ class AppRoutes {
   static const String alerts = '/guardian/alerts';
   static const String activityLog = '/guardian/activity';
   static const String geofence = '/guardian/geofence';
+  
+  // Profile routes
+  static const String elderlyProfile = '/profile/elderly';
+  static const String guardianProfile = '/profile/guardian';
+  static const String caregiverProfile = '/profile/caregiver';
 
   /// Generate routes
   static Route<dynamic> generateRoute(RouteSettings settings) {
@@ -106,6 +112,14 @@ class AppRoutes {
       // Connections route
       case connections:
         return _slideRoute(const ConnectionScreen(), settings);
+      
+      // Profile routes
+      case elderlyProfile:
+        return _slideRoute(const ElderlyProfileScreen(), settings);
+      case guardianProfile:
+        return _slideRoute(const GuardianProfileScreen(), settings);
+      case caregiverProfile:
+        return _slideRoute(const CaregiverProfileScreen(), settings);
       
       default:
         return _fadeRoute(

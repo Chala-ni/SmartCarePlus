@@ -41,8 +41,8 @@ frontend/android/app/google-services.json
 google-services.json
 
 # Local media storage (videos/images)
-//backend/media/
-//media/
+backend/media/
+media/
 
 # ML models (large files)
 backend/ml_models/

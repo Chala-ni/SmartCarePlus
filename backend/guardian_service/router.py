@@ -6,7 +6,7 @@ Endpoints for real-time monitoring, fall detection, alerts, and geofencing.
 Uses pre-recorded videos simulated as live CCTV feeds for demo.
 """
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, UploadFile, File, HTTPException, Response
 from fastapi.responses import FileResponse, StreamingResponse
 from typing import Optional, List
 from pydantic import BaseModel
@@ -18,6 +18,10 @@ import cv2
 import numpy as np
 import base64
 import asyncio
+import logging
+import io
+
+logger = logging.getLogger(__name__)
 
 from .models import (
     GaitAnalyzer,
@@ -32,30 +36,62 @@ from .models import (
     ActivityClassifier,
     ActivityType,
     get_gait_analyzer,
-    get_tug_handler
+    get_tug_handler,
+    # Deep learning video classifier
+    VideoClassifier,
+    VideoClassificationResult,
+    VideoActivityType,
+    get_video_classifier
 )
 
 router = APIRouter()
 
 # Video files directory
 VIDEO_DIR = Path(__file__).parent.parent / "media" / "simulation_footage" / "guardian"
+PLACEHOLDER_VIDEO = VIDEO_DIR / "placeholder.mp4"
+
+# Minimal valid MP4 bytes for fallback (tiny valid MP4 header)
+BLANK_MP4_BYTES = bytes([
+    0x00, 0x00, 0x00, 0x1C, 0x66, 0x74, 0x79, 0x70,
+    0x69, 0x73, 0x6F, 0x6D, 0x00, 0x00, 0x02, 0x00,
+    0x69, 0x73, 0x6F, 0x6D, 0x69, 0x73, 0x6F, 0x32,
+    0x6D, 0x70, 0x34, 0x31, 0x00, 0x00, 0x00, 0x08,
+    0x6D, 0x6F, 0x6F, 0x76,
+])
+
+
+def _get_video_fallback() -> tuple:
+    """Returns fallback video content when requested video is not found."""
+    if PLACEHOLDER_VIDEO.exists():
+        return PLACEHOLDER_VIDEO.read_bytes(), "video/mp4"
+    logger.warning("No placeholder video found, returning blank MP4 frame")
+    return BLANK_MP4_BYTES, "video/mp4"
+
+
+def _check_video_exists(video_path: Path) -> bool:
+    """Check if video file exists and is a valid file."""
+    return video_path.exists() and video_path.is_file()
+
 
 # Service instances (singleton pattern)
 _gait_analyzer: Optional[GaitAnalyzer] = None
 _tug_handler: Optional[TUGTestHandler] = None
 _activity_classifier: Optional[ActivityClassifier] = None
+_video_classifier: Optional[VideoClassifier] = None
 
 
 def get_services():
     """Get or initialize service instances."""
-    global _gait_analyzer, _tug_handler, _activity_classifier
+    global _gait_analyzer, _tug_handler, _activity_classifier, _video_classifier
     if _gait_analyzer is None:
         _gait_analyzer = get_gait_analyzer()
     if _tug_handler is None:
         _tug_handler = get_tug_handler()
     if _activity_classifier is None:
         _activity_classifier = ActivityClassifier()
-    return _gait_analyzer, _tug_handler, _activity_classifier
+    if _video_classifier is None:
+        _video_classifier = get_video_classifier()
+    return _gait_analyzer, _tug_handler, _activity_classifier, _video_classifier
 
 
 # ============= Pydantic Models =============
@@ -299,32 +335,16 @@ async def get_stream_url(camera_id: str):
     }
 
 
-# ============= Video Streaming Endpoints =============
+# ============= AI Video Classification Endpoints =============
 
-@router.get("/videos")
-async def list_videos():
-    """List all available demo videos for CCTV simulation."""
-    videos = []
-    for video_id, filename in VIDEO_FILES.items():
-        video_path = VIDEO_DIR / filename
-        exists = video_path.exists()
-        videos.append({
-            "id": video_id,
-            "filename": filename,
-            "available": exists,
-            "url": f"/guardian/video/{video_id}" if exists else None
-        })
+@router.post("/classify-video/{video_id}")
+async def classify_video(video_id: str):
+    """
+    Classify a video using the trained deep learning model.
     
-    return {
-        "videos": videos,
-        "total": len(videos),
-        "available": len([v for v in videos if v["available"]])
-    }
-
-
-@router.get("/video/{video_id}")
-async def get_video(video_id: str):
-    """Stream a pre-recorded video file for demo CCTV simulation."""
+    Uses EfficientNetV2-S + LSTM model trained on fall/gait dataset.
+    Returns activity classification and fall/gait abnormality detection.
+    """
     if video_id not in VIDEO_FILES:
         raise HTTPException(status_code=404, detail=f"Video '{video_id}' not found")
     
@@ -333,10 +353,168 @@ async def get_video(video_id: str):
     if not video_path.exists():
         raise HTTPException(status_code=404, detail=f"Video file not found on server")
     
-    return FileResponse(
-        path=str(video_path),
-        media_type="video/mp4",
-        filename=VIDEO_FILES[video_id]
+    # Get video classifier
+    _, _, _, video_classifier = get_services()
+    
+    # Ensure model is loaded
+    if not video_classifier.is_loaded:
+        if not video_classifier.load_model():
+            raise HTTPException(status_code=500, detail="Failed to load video classification model")
+    
+    # Classify the video
+    result = video_classifier.classify_video_file(str(video_path))
+    
+    return {
+        "video_id": video_id,
+        "classification": result.to_dict(),
+        "alerts": {
+            "fall_detected": result.is_fall_detected,
+            "gait_abnormal": result.is_gait_abnormal,
+            "requires_attention": result.is_fall_detected or result.is_gait_abnormal
+        }
+    }
+
+
+@router.get("/classifier/status")
+async def get_classifier_status():
+    """Get the status of the video classification model."""
+    _, _, _, video_classifier = get_services()
+    
+    return {
+        "model_loaded": video_classifier.is_loaded,
+        "model_path": str(video_classifier.model_path),
+        "class_mapping": video_classifier.class_mapping if video_classifier.is_loaded else None,
+        "num_classes": len(video_classifier.class_mapping) if video_classifier.is_loaded else 0
+    }
+
+
+@router.post("/classifier/load")
+async def load_classifier():
+    """Explicitly load the video classification model."""
+    _, _, _, video_classifier = get_services()
+    
+    success = video_classifier.load_model()
+    
+    if success:
+        return {
+            "status": "success",
+            "message": "Model loaded successfully",
+            "model_path": str(video_classifier.model_path),
+            "classes": video_classifier.class_mapping
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to load model")
+
+
+# ============= Video Streaming Endpoints =============
+
+@router.get("/videos")
+async def list_videos():
+    """List all available demo videos for CCTV simulation."""
+    logger.info(f"📋 GET /videos - Listing all demo videos")
+    logger.info(f"  📁 Video directory: {VIDEO_DIR}")
+    logger.info(f"  📁 Directory exists: {VIDEO_DIR.exists()}")
+    
+    videos = []
+    for video_id, filename in VIDEO_FILES.items():
+        video_path = VIDEO_DIR / filename
+        exists = video_path.exists()
+        if exists:
+            size_mb = video_path.stat().st_size / (1024 * 1024)
+            logger.debug(f"  ✅ {video_id}: {filename} ({size_mb:.2f} MB)")
+        else:
+            logger.warning(f"  ❌ {video_id}: {filename} (NOT FOUND)")
+        videos.append({
+            "id": video_id,
+            "filename": filename,
+            "available": exists,
+            "url": f"/api/guardian/video/{video_id}" if exists else None
+        })
+    
+    available_count = len([v for v in videos if v["available"]])
+    logger.info(f"  📊 Total: {len(videos)}, Available: {available_count}")
+    
+    return {
+        "videos": videos,
+        "total": len(videos),
+        "available": available_count,
+        "video_dir": str(VIDEO_DIR)
+    }
+
+
+@router.get("/video/{video_id}")
+async def get_video(video_id: str, fallback: bool = True):
+    """
+    Stream a pre-recorded video file for demo CCTV simulation.
+    
+    Args:
+        video_id: The ID of the video to stream
+        fallback: If True, return a placeholder/blank video instead of 404 when file missing
+    """
+    start_time = time.time()
+    logger.info(f"")
+    logger.info(f"{'='*60}")
+    logger.info(f"🎥 VIDEO STREAM REQUEST")
+    logger.info(f"{'='*60}")
+    logger.info(f"  🎬 Video ID: {video_id}")
+    logger.info(f"  🔄 Fallback: {fallback}")
+    
+    if video_id not in VIDEO_FILES:
+        logger.warning(f"  ❌ Video ID not in catalog: {video_id}")
+        logger.debug(f"  📁 Available videos: {list(VIDEO_FILES.keys())}")
+        raise HTTPException(status_code=404, detail=f"Video '{video_id}' not found in catalog")
+    
+    video_path = VIDEO_DIR / VIDEO_FILES[video_id]
+    logger.info(f"  📂 Full path: {video_path}")
+    logger.info(f"  📁 Video dir exists: {VIDEO_DIR.exists()}")
+    
+    if _check_video_exists(video_path):
+        file_size = video_path.stat().st_size / (1024 * 1024)  # MB
+        logger.info(f"  ✅ File exists ({file_size:.2f} MB)")
+        logger.info(f"  📤 Streaming video: {video_path}")
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"  ⏱️ Response time: {elapsed:.1f}ms")
+        logger.info(f"{'='*60}")
+        return FileResponse(
+            path=str(video_path),
+            media_type="video/mp4",
+            filename=VIDEO_FILES[video_id],
+            headers={
+                "Accept-Ranges": "bytes",
+                "Cache-Control": "no-cache",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+    
+    logger.warning(f"  ⚠️ Video file not found on disk: {video_path}")
+    logger.warning(f"  ⚠️ Checking if directory exists: {VIDEO_DIR.exists()}")
+    if VIDEO_DIR.exists():
+        logger.warning(f"  ⚠️ Files in directory: {list(VIDEO_DIR.glob('*.mp4'))}")
+    
+    # If fallback is enabled, return placeholder or blank video
+    if fallback:
+        logger.info(f"  🔄 Using fallback video")
+        fallback_content, media_type = _get_video_fallback()
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"  ⏱️ Fallback response time: {elapsed:.1f}ms")
+        return Response(
+            content=fallback_content,
+            media_type=media_type,
+            headers={"X-Fallback": "true", "Access-Control-Allow-Origin": "*"}
+        )
+    
+    # Return proper 404 if no fallback requested
+    elapsed = (time.time() - start_time) * 1000
+    logger.error(f"  ❌ Returning 404 in {elapsed:.1f}ms")
+    raise HTTPException(
+        status_code=404,
+        detail={
+            "error": "Video file not found",
+            "video_id": video_id,
+            "expected_path": str(video_path),
+            "message": f"The video file '{VIDEO_FILES[video_id]}' does not exist on disk. "
+                       f"Ensure the media directory contains the required files."
+        }
     )
 
 

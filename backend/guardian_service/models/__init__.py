@@ -25,6 +25,13 @@ from .tug_handler import (
     get_tug_handler
 )
 
+from .video_classifier import (
+    VideoClassifier,
+    VideoClassificationResult,
+    VideoActivityType,
+    get_video_classifier
+)
+
 __all__ = [
     # Gait Analyzer
     "GaitAnalyzer",
@@ -43,4 +50,9 @@ __all__ = [
     "ActivityClassifier",
     "ActivityType",
     "get_tug_handler",
+    # Video Classifier (Deep Learning)
+    "VideoClassifier",
+    "VideoClassificationResult",
+    "VideoActivityType",
+    "get_video_classifier",
 ]

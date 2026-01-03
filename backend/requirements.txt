@@ -11,7 +11,7 @@ firebase-admin==6.4.0
 
 # AI/ML
 mediapipe==0.10.9
-tensorflow==2.15.0
+tensorflow==2.18.0
 scikit-learn==1.4.0
 numpy==1.26.3
 opencv-python==4.9.0.80

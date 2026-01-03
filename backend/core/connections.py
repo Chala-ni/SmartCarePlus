@@ -8,16 +8,30 @@ Supports invite codes for easy linking.
 import secrets
 import string
 import logging
+import traceback
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 from enum import Enum
 
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel
 
-# Configure logger
-logger = logging.getLogger(__name__)
+# Configure logger with detailed formatting
+logger = logging.getLogger("smartcare.connections")
 logger.setLevel(logging.DEBUG)
+
+# Ensure handler if not present
+if not logger.handlers:
+    import sys
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
 
 from core.database import get_db, is_mock_mode
 from core.auth import verify_firebase_token, AuthenticatedUser
@@ -134,18 +148,26 @@ async def generate_invite_code_endpoint(
     - Elderly users generate codes to invite guardians/caregivers
     - Guardians/Caregivers generate codes to be added by elderly
     """
-    logger.info(f"🔑 Generate invite code request from user: {current_user.uid}")
+    start_time = time.time()
+    logger.info(f"")
+    logger.info(f"{'='*60}")
+    logger.info(f"🔑 GENERATE INVITE CODE REQUEST")
+    logger.info(f"{'='*60}")
+    logger.info(f"  👤 User ID: {current_user.uid}")
+    logger.info(f"  📧 Email: {current_user.email}")
+    logger.info(f"  🎭 Role: {current_user.role}")
     
     db = get_db()
+    logger.debug(f"  📦 Database mode: {'Firebase' if not is_mock_mode() else 'MOCK'}")
     now = datetime.now(timezone.utc)
     expires = now + timedelta(hours=24)
     
     code = generate_invite_code()
-    logger.debug(f"  Generated code: {code}")
+    logger.info(f"  🎟️ Generated code: {code}")
     
     # Get user info
     user_info = await get_user_info(current_user.uid)
-    logger.debug(f"  User info: {user_info}")
+    logger.debug(f"  👤 User info: {user_info}")
     
     invite_data = {
         "code": code,
@@ -160,7 +182,11 @@ async def generate_invite_code_endpoint(
     
     if is_mock_mode():
         _mock_invite_codes[code] = invite_data
-        logger.info(f"✅ Code {code} created successfully (mock mode)")
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"  ✅ Code {code} created successfully (MOCK)")
+        logger.info(f"  📋 Current mock codes: {list(_mock_invite_codes.keys())}")
+        logger.info(f"  ⏱️ Response time: {elapsed:.1f}ms")
+        logger.info(f"{'='*60}")
         return {
             "success": True,
             "code": code,
@@ -170,7 +196,10 @@ async def generate_invite_code_endpoint(
     
     # Store in Firestore
     db.collection("invite_codes").document(code).set(invite_data)
-    logger.info(f"✅ Code {code} created successfully (Firestore)")
+    elapsed = (time.time() - start_time) * 1000
+    logger.info(f"  ✅ Code {code} created successfully (Firestore)")
+    logger.info(f"  ⏱️ Response time: {elapsed:.1f}ms")
+    logger.info(f"{'='*60}")
     
     return {
         "success": True,
@@ -189,82 +218,190 @@ async def join_with_code(
     Join/link with another user using their invite code.
     Creates a connection between the code creator and the current user.
     """
-    db = get_db()
+    start_time = time.time()
     code = request.invite_code.upper().strip()
-    now = get_now_iso()
     
-    # Get invite code data
-    if is_mock_mode():
-        if code not in _mock_invite_codes:
-            raise HTTPException(status_code=404, detail="Invalid or expired invite code")
-        invite_data = _mock_invite_codes[code]
-    else:
-        code_doc = db.collection("invite_codes").document(code).get()
-        if not code_doc.exists:
-            raise HTTPException(status_code=404, detail="Invalid or expired invite code")
-        invite_data = code_doc.to_dict()
+    logger.info(f"")
+    logger.info(f"{'='*60}")
+    logger.info(f"🔗 JOIN WITH CODE REQUEST")
+    logger.info(f"{'='*60}")
+    logger.info(f"  👤 User ID: {current_user.uid}")
+    logger.info(f"  📧 Email: {current_user.email}")
+    logger.info(f"  🎭 Role: {current_user.role}")
+    logger.info(f"  🔑 Invite Code: {code}")
+    logger.info(f"  🕐 Timestamp: {datetime.now(timezone.utc).isoformat()}")
+    logger.info(f"{'='*60}")
     
-    # Validate code
-    if invite_data.get("used"):
-        raise HTTPException(status_code=400, detail="This invite code has already been used")
+    try:
+        db = get_db()
+        logger.debug(f"  📦 Database mode: {'Firebase' if not is_mock_mode() else 'MOCK'}")
+        now = get_now_iso()
     
-    expires_at = datetime.fromisoformat(invite_data["expires_at"].replace('Z', '+00:00'))
-    if datetime.now(timezone.utc) > expires_at:
-        raise HTTPException(status_code=400, detail="This invite code has expired")
-    
-    if invite_data["created_by"] == current_user.uid:
-        raise HTTPException(status_code=400, detail="You cannot use your own invite code")
-    
-    # Get both users' info
-    creator_info = await get_user_info(invite_data["created_by"])
-    joiner_info = await get_user_info(current_user.uid)
-    
-    # Determine connection structure
-    creator_role = invite_data["created_by_role"]
-    joiner_role = joiner_info["role"]
-    
-    # Determine who is elderly and who is guardian/caregiver
-    if creator_role == "elderly":
-        elderly_id = invite_data["created_by"]
-        elderly_name = invite_data["created_by_name"]
-        linked_user_id = current_user.uid
-        linked_user_name = joiner_info["name"]
-        connection_type = ConnectionType.GUARDIAN if joiner_role == "guardian" else ConnectionType.CAREGIVER
-    else:
-        # Creator is guardian/caregiver, joiner should be elderly
-        if joiner_role != "elderly":
-            raise HTTPException(
-                status_code=400, 
-                detail="Only elderly users can join using a guardian/caregiver's code"
-            )
-        elderly_id = current_user.uid
-        elderly_name = joiner_info["name"]
-        linked_user_id = invite_data["created_by"]
-        linked_user_name = invite_data["created_by_name"]
-        connection_type = ConnectionType.GUARDIAN if creator_role == "guardian" else ConnectionType.CAREGIVER
-    
-    # Create connection
-    connection_id = f"{elderly_id}_{linked_user_id}"
-    connection_data = {
-        "id": connection_id,
-        "elderly_id": elderly_id,
-        "elderly_name": elderly_name,
-        "linked_user_id": linked_user_id,
-        "linked_user_name": linked_user_name,
-        "connection_type": connection_type.value,
-        "status": ConnectionStatus.ACTIVE.value,
-        "created_at": now
-    }
-    
-    if is_mock_mode():
-        # Check for duplicate
-        for conn in _mock_connections:
-            if conn["id"] == connection_id:
-                raise HTTPException(status_code=400, detail="Connection already exists")
+        # Get invite code data
+        logger.info(f"  🔍 Looking up invite code: {code}")
+        lookup_start = time.time()
         
-        _mock_connections.append(connection_data)
-        _mock_invite_codes[code]["used"] = True
-        _mock_invite_codes[code]["used_by"] = current_user.uid
+        if is_mock_mode():
+            logger.debug(f"  🧪 Mock mode - checking _mock_invite_codes")
+            logger.debug(f"  🧪 Available codes: {list(_mock_invite_codes.keys())}")
+            if code not in _mock_invite_codes:
+                logger.warning(f"  ❌ Code {code} not found in mock store")
+                elapsed = (time.time() - start_time) * 1000
+                logger.info(f"  ⏱️ Request failed in {elapsed:.1f}ms")
+                raise HTTPException(status_code=404, detail="Invalid or expired invite code")
+            invite_data = _mock_invite_codes[code]
+            logger.info(f"  ✅ Code found in mock store")
+        else:
+            logger.debug(f"  🔥 Firebase mode - querying Firestore")
+            code_doc = db.collection("invite_codes").document(code).get()
+            lookup_time = (time.time() - lookup_start) * 1000
+            logger.debug(f"  ⏱️ Firestore lookup took {lookup_time:.1f}ms")
+            
+            if not code_doc.exists:
+                logger.warning(f"  ❌ Code {code} not found in Firestore")
+                elapsed = (time.time() - start_time) * 1000
+                logger.info(f"  ⏱️ Request failed in {elapsed:.1f}ms")
+                raise HTTPException(status_code=404, detail="Invalid or expired invite code")
+            invite_data = code_doc.to_dict()
+            logger.info(f"  ✅ Code found in Firestore")
+        
+        logger.debug(f"  📄 Invite data: created_by={invite_data.get('created_by')}, role={invite_data.get('created_by_role')}")
+    
+        # Validate code
+        logger.info(f"  🔍 Validating invite code...")
+        if invite_data.get("used"):
+            logger.warning(f"  ❌ Code already used")
+            elapsed = (time.time() - start_time) * 1000
+            logger.info(f"  ⏱️ Request failed in {elapsed:.1f}ms")
+            raise HTTPException(status_code=400, detail="This invite code has already been used")
+    
+        expires_at = datetime.fromisoformat(invite_data["expires_at"].replace('Z', '+00:00'))
+        if datetime.now(timezone.utc) > expires_at:
+            logger.warning(f"  ❌ Code expired at {expires_at}")
+            elapsed = (time.time() - start_time) * 1000
+            logger.info(f"  ⏱️ Request failed in {elapsed:.1f}ms")
+            raise HTTPException(status_code=400, detail="This invite code has expired")
+    
+        if invite_data["created_by"] == current_user.uid:
+            logger.warning(f"  ❌ User trying to use own code")
+            elapsed = (time.time() - start_time) * 1000
+            logger.info(f"  ⏱️ Request failed in {elapsed:.1f}ms")
+            raise HTTPException(status_code=400, detail="You cannot use your own invite code")
+        
+        logger.info(f"  ✅ Code validation passed")
+    
+        # Get both users' info
+        logger.info(f"  👥 Fetching user information...")
+        user_info_start = time.time()
+        creator_info = await get_user_info(invite_data["created_by"])
+        logger.debug(f"  👤 Creator info: {creator_info}")
+        joiner_info = await get_user_info(current_user.uid)
+        logger.debug(f"  👤 Joiner info: {joiner_info}")
+        user_info_time = (time.time() - user_info_start) * 1000
+        logger.debug(f"  ⏱️ User info lookup took {user_info_time:.1f}ms")
+    
+        # Determine connection structure
+        creator_role = invite_data["created_by_role"]
+        joiner_role = joiner_info["role"]
+    
+        # Determine who is elderly and who is guardian/caregiver
+        if creator_role == "elderly":
+            elderly_id = invite_data["created_by"]
+            elderly_name = invite_data["created_by_name"]
+            linked_user_id = current_user.uid
+            linked_user_name = joiner_info["name"]
+            connection_type = ConnectionType.GUARDIAN if joiner_role == "guardian" else ConnectionType.CAREGIVER
+        else:
+            # Creator is guardian/caregiver, joiner should be elderly
+            if joiner_role != "elderly":
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Only elderly users can join using a guardian/caregiver's code"
+                )
+            elderly_id = current_user.uid
+            elderly_name = joiner_info["name"]
+            linked_user_id = invite_data["created_by"]
+            linked_user_name = invite_data["created_by_name"]
+            connection_type = ConnectionType.GUARDIAN if creator_role == "guardian" else ConnectionType.CAREGIVER
+    
+        # Create connection
+        connection_id = f"{elderly_id}_{linked_user_id}"
+        connection_data = {
+            "id": connection_id,
+            "elderly_id": elderly_id,
+            "elderly_name": elderly_name,
+            "linked_user_id": linked_user_id,
+            "linked_user_name": linked_user_name,
+            "connection_type": connection_type.value,
+            "status": ConnectionStatus.ACTIVE.value,
+            "created_at": now
+        }
+    
+        if is_mock_mode():
+            # Check for duplicate
+            for conn in _mock_connections:
+                if conn["id"] == connection_id:
+                    raise HTTPException(status_code=400, detail="Connection already exists")
+        
+            _mock_connections.append(connection_data)
+            _mock_invite_codes[code]["used"] = True
+            _mock_invite_codes[code]["used_by"] = current_user.uid
+            
+            elapsed = (time.time() - start_time) * 1000
+            logger.info(f"")
+            logger.info(f"  ✅ CONNECTION CREATED SUCCESSFULLY (MOCK)")
+            logger.info(f"  🔗 Connection ID: {connection_id}")
+            logger.info(f"  👴 Elderly: {elderly_name} ({elderly_id})")
+            logger.info(f"  🛡️ Guardian: {linked_user_name} ({linked_user_id})")
+            logger.info(f"  ⏱️ Total time: {elapsed:.1f}ms")
+            logger.info(f"{'='*60}")
+            logger.info(f"")
+        
+            return {
+                "success": True,
+                "message": f"Successfully connected with {invite_data['created_by_name']}!",
+                "connection": connection_data
+            }
+    
+        # Check for existing connection
+        existing = db.collection("connections").document(connection_id).get()
+        if existing.exists:
+            raise HTTPException(status_code=400, detail="Connection already exists")
+    
+        # Save connection
+        db.collection("connections").document(connection_id).set(connection_data)
+    
+        # Mark code as used
+        db.collection("invite_codes").document(code).update({
+            "used": True,
+            "used_by": current_user.uid
+        })
+    
+        # Update guardian's linked_elderly_ids if applicable
+        if connection_type == ConnectionType.GUARDIAN:
+            guardian_ref = db.collection("users").document(linked_user_id)
+            guardian_doc = guardian_ref.get()
+            if guardian_doc.exists:
+                guardian_data = guardian_doc.to_dict()
+                guardian_profile = guardian_data.get("guardian_profile", {})
+                linked_ids = guardian_profile.get("linked_elderly_ids", [])
+                if elderly_id not in linked_ids:
+                    linked_ids.append(elderly_id)
+                    guardian_ref.update({
+                        "guardian_profile.linked_elderly_ids": linked_ids,
+                        "updated_at": now
+                    })
+                    logger.debug(f"  📝 Updated guardian's linked_elderly_ids")
+    
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"")
+        logger.info(f"  ✅ CONNECTION CREATED SUCCESSFULLY (FIREBASE)")
+        logger.info(f"  🔗 Connection ID: {connection_id}")
+        logger.info(f"  👴 Elderly: {elderly_name} ({elderly_id})")
+        logger.info(f"  🛡️ Guardian: {linked_user_name} ({linked_user_id})")
+        logger.info(f"  ⏱️ Total time: {elapsed:.1f}ms")
+        logger.info(f"{'='*60}")
+        logger.info(f"")
         
         return {
             "success": True,
@@ -272,40 +409,35 @@ async def join_with_code(
             "connection": connection_data
         }
     
-    # Check for existing connection
-    existing = db.collection("connections").document(connection_id).get()
-    if existing.exists:
-        raise HTTPException(status_code=400, detail="Connection already exists")
-    
-    # Save connection
-    db.collection("connections").document(connection_id).set(connection_data)
-    
-    # Mark code as used
-    db.collection("invite_codes").document(code).update({
-        "used": True,
-        "used_by": current_user.uid
-    })
-    
-    # Update guardian's linked_elderly_ids if applicable
-    if connection_type == ConnectionType.GUARDIAN:
-        guardian_ref = db.collection("users").document(linked_user_id)
-        guardian_doc = guardian_ref.get()
-        if guardian_doc.exists:
-            guardian_data = guardian_doc.to_dict()
-            guardian_profile = guardian_data.get("guardian_profile", {})
-            linked_ids = guardian_profile.get("linked_elderly_ids", [])
-            if elderly_id not in linked_ids:
-                linked_ids.append(elderly_id)
-                guardian_ref.update({
-                    "guardian_profile.linked_elderly_ids": linked_ids,
-                    "updated_at": now
-                })
-    
-    return {
-        "success": True,
-        "message": f"Successfully connected with {invite_data['created_by_name']}!",
-        "connection": connection_data
-    }
+    except HTTPException as e:
+        # Re-raise HTTP exceptions as-is
+        elapsed = (time.time() - start_time) * 1000
+        logger.warning(f"  ⚠️ HTTP Exception: {e.status_code} - {e.detail} ({elapsed:.1f}ms)")
+        raise
+    except KeyError as e:
+        elapsed = (time.time() - start_time) * 1000
+        logger.error(f"❌ KeyError in join_with_code ({elapsed:.1f}ms): {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Data processing error", "message": f"Missing required field: {e}"}
+        )
+    except ValueError as e:
+        elapsed = (time.time() - start_time) * 1000
+        logger.error(f"❌ ValueError in join_with_code ({elapsed:.1f}ms): {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid data", "message": str(e)}
+        )
+    except Exception as e:
+        elapsed = (time.time() - start_time) * 1000
+        logger.error(f"❌ Unexpected error in join_with_code ({elapsed:.1f}ms): {type(e).__name__}: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Internal server error", "message": str(e)}
+        )
 
 
 @router.get("/my-connections")
@@ -316,30 +448,21 @@ async def get_my_connections(
     Get all connections for the current user.
     Works for both elderly and guardians/caregivers.
     """
+    start_time = time.time()
+    logger.info(f"🔗 GET /my-connections for user: {current_user.uid}")
+    
     db = get_db()
     
     if is_mock_mode():
-        # Filter connections for current user
+        # Filter connections for current user - return only actual connections
         connections = []
         for conn in _mock_connections:
             if conn["elderly_id"] == current_user.uid or conn["linked_user_id"] == current_user.uid:
                 connections.append(conn)
         
-        # Add mock data if no connections
-        if not connections:
-            connections = [
-                {
-                    "id": "mock_conn_1",
-                    "elderly_id": "elder_001",
-                    "elderly_name": "Mrs. Silva",
-                    "linked_user_id": current_user.uid,
-                    "linked_user_name": "Demo Guardian",
-                    "connection_type": "guardian",
-                    "status": "active",
-                    "created_at": "2024-01-01T00:00:00Z"
-                }
-            ]
-        
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"  ✅ Found {len(connections)} connections (MOCK) in {elapsed:.1f}ms")
+        # Return actual connections only - no mock data injection
         return {"connections": connections}
     
     # Query connections where user is elderly or linked_user
@@ -363,6 +486,9 @@ async def get_my_elderly(
     current_user: AuthenticatedUser = Depends(verify_firebase_token)
 ):
     """Get list of elderly users connected to the current guardian/caregiver."""
+    start_time = time.time()
+    logger.info(f"👴 GET /my-elderly for user: {current_user.uid}")
+    
     db = get_db()
     
     if is_mock_mode():
@@ -376,13 +502,9 @@ async def get_my_elderly(
                     "connected_at": conn["created_at"]
                 })
         
-        # Add mock data if empty
-        if not elderly_list:
-            elderly_list = [
-                {"id": "elder_001", "name": "Mrs. Silva", "connection_type": "guardian", "connected_at": "2024-01-01T00:00:00Z"},
-                {"id": "elder_002", "name": "Mr. Perera", "connection_type": "guardian", "connected_at": "2024-01-15T00:00:00Z"}
-            ]
-        
+        elapsed = (time.time() - start_time) * 1000
+        logger.info(f"  ✅ Found {len(elderly_list)} elderly users (MOCK) in {elapsed:.1f}ms")
+        # Return actual connections only - no mock data injection
         return {"elderly": elderly_list}
     
     # Query connections
@@ -419,12 +541,7 @@ async def get_my_caregivers(
                     "connected_at": conn["created_at"]
                 })
         
-        # Add mock data if empty
-        if not caregiver_list:
-            caregiver_list = [
-                {"id": "guardian_001", "name": "Nimali Silva", "type": "guardian", "connected_at": "2024-01-01T00:00:00Z"}
-            ]
-        
+        # Return actual connections only - no mock data injection
         return {"caregivers": caregiver_list}
     
     # Query connections

@@ -584,22 +584,25 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
   }
 
   Widget _buildProfileAvatar() {
-    return Container(
-      width: 56,
-      height: 56,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: AppColors.neonCyan, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.neonCyan.withOpacity(0.3),
-            blurRadius: 12,
-          ),
-        ],
-      ),
-      child: const CircleAvatar(
-        backgroundColor: AppColors.surface,
-        child: Icon(Icons.person, color: AppColors.neonCyan, size: 28),
+    return GestureDetector(
+      onTap: () => Navigator.pushNamed(context, Routes.elderlyProfile),
+      child: Container(
+        width: 56,
+        height: 56,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.neonCyan, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.neonCyan.withOpacity(0.3),
+              blurRadius: 12,
+            ),
+          ],
+        ),
+        child: const CircleAvatar(
+          backgroundColor: AppColors.surface,
+          child: Icon(Icons.person, color: AppColors.neonCyan, size: 28),
+        ),
       ),
     );
   }

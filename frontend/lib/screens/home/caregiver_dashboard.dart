@@ -241,7 +241,7 @@ class _CaregiverHomeTab extends ConsumerWidget {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    _buildProfileAvatar(),
+                    _buildProfileAvatar(context),
                   ],
                 ),
               ],
@@ -418,23 +418,28 @@ class _CaregiverHomeTab extends ConsumerWidget {
     );
   }
 
-  Widget _buildProfileAvatar() {
-    return Container(
-      width: 50,
-      height: 50,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        border: Border.all(color: AppColors.neonGreen, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: AppColors.neonGreen.withOpacity(0.3),
-            blurRadius: 10,
-          ),
-        ],
-      ),
-      child: const CircleAvatar(
-        backgroundColor: AppColors.surface,
-        child: Icon(Icons.person, color: AppColors.neonGreen),
+  Widget _buildProfileAvatar(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.pushNamed(context, Routes.caregiverProfile);
+      },
+      child: Container(
+        width: 50,
+        height: 50,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: AppColors.neonGreen, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: AppColors.neonGreen.withOpacity(0.3),
+              blurRadius: 10,
+            ),
+          ],
+        ),
+        child: const CircleAvatar(
+          backgroundColor: AppColors.surface,
+          child: Icon(Icons.person, color: AppColors.neonGreen),
+        ),
       ),
     );
   }

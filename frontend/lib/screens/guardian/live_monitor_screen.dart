@@ -2,90 +2,191 @@
 ///
 /// Owner: Devin
 /// Displays pre-recorded videos as simulated live CCTV feeds for demo
-/// Videos are now streamed from the backend for proper architecture
+/// Uses connected elderly from Firebase with randomly assigned demo videos
 
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
+import 'package:http/http.dart' as http;
 import '../../core/constants/colors.dart';
 import '../../core/services/api_service.dart';
+import '../../providers/connection_provider.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 
-class LiveMonitorScreen extends StatefulWidget {
+/// Available demo video IDs with their scenarios
+const Map<String, String> demoVideos = {
+  'walking_normal_1': 'Normal Walking',
+  'walking_normal_2': 'Normal Walking',
+  'walking_slow_1': 'Slow Walking',
+  'sitting_resting_1': 'Resting',
+  'lying_down_1': 'Lying Down',
+  'standing_idle_1': 'Standing',
+  'gait_normal_1': 'Normal Gait',
+  'gait_abnormal_1': 'Abnormal Gait',
+};
+
+class LiveMonitorScreen extends ConsumerStatefulWidget {
   const LiveMonitorScreen({super.key});
 
   @override
-  State<LiveMonitorScreen> createState() => _LiveMonitorScreenState();
+  ConsumerState<LiveMonitorScreen> createState() => _LiveMonitorScreenState();
 }
 
-class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
-  int _selectedCameraIndex = 0;
+class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
+  ElderlyInfo? _selectedElderly;
   VideoPlayerController? _videoController;
   bool _isLoading = true;
   bool _hasError = false;
+  String _errorMessage = '';
   Timer? _timestampTimer;
   String _currentTimestamp = '';
-
-  // Camera feeds with video IDs that map to backend video endpoints
-  // Videos are served from: ${ApiConfig.baseUrl}/api/guardian/video/{video_id}
-  final List<Map<String, dynamic>> _cameras = [
-    {'name': 'Living Room', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'walking_normal_1', 'scenario': 'Normal Walking'},
-    {'name': 'Bedroom', 'location': 'Upper Floor', 'status': 'Online', 'videoId': 'sitting_resting_1', 'scenario': 'Sitting/Resting'},
-    {'name': 'Kitchen', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'walking_slow_1', 'scenario': 'Slow Walking'},
-    {'name': 'Hallway', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'gait_normal_1', 'scenario': 'Normal Gait'},
-    {'name': 'Guest Room', 'location': 'Upper Floor', 'status': 'Online', 'videoId': 'lying_down_1', 'scenario': 'Lying Down'},
-    {'name': 'Study', 'location': 'Main Floor', 'status': 'Online', 'videoId': 'standing_idle_1', 'scenario': 'Standing Idle'},
-  ];
+  String _currentVideoId = '';
   
-  /// Get the video URL from the backend
-  String _getVideoUrl(String videoId) {
-    return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
-  }
-
+  // Activity analysis (simulated)
+  String _currentActivity = 'N/A';
+  String _currentConfidence = 'N/A';
+  String _fallRisk = 'N/A';
+  
   @override
   void initState() {
     super.initState();
     _updateTimestamp();
     _timestampTimer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTimestamp());
-    _initializeVideo();
+    
+    // Load connected elderly
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(connectionProvider.notifier).loadMyElderly();
+    });
   }
 
   void _updateTimestamp() {
     final now = DateTime.now();
-    setState(() {
-      _currentTimestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
-          '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
-    });
+    if (mounted) {
+      setState(() {
+        _currentTimestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} '
+            '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+      });
+    }
+  }
+  
+  /// Assign a random demo video based on elderly ID (deterministic but varied)
+  String _getVideoIdForElderly(String elderlyId) {
+    final videos = demoVideos.keys.toList();
+    final hash = elderlyId.hashCode.abs();
+    return videos[hash % videos.length];
+  }
+  
+  String _getVideoUrl(String videoId) {
+    return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
   }
 
   Future<void> _initializeVideo() async {
+    if (_selectedElderly == null) return;
+    
     setState(() {
       _isLoading = true;
       _hasError = false;
+      _errorMessage = '';
     });
 
     try {
       _videoController?.dispose();
       
-      // Stream video from backend API
-      final videoId = _cameras[_selectedCameraIndex]['videoId'];
-      final videoUrl = _getVideoUrl(videoId);
+      // Get video ID for this elderly
+      _currentVideoId = _selectedElderly!.assignedVideoId.isNotEmpty 
+          ? _selectedElderly!.assignedVideoId
+          : _getVideoIdForElderly(_selectedElderly!.id);
+          
+      final videoUrl = _getVideoUrl(_currentVideoId);
+      debugPrint('');
+      debugPrint('🎬 ═══════════════════════════════════════════════════');
+      debugPrint('🎬 VIDEO LOADING');
+      debugPrint('🎬 ═══════════════════════════════════════════════════');
+      debugPrint('🎬 Video ID: $_currentVideoId');
+      debugPrint('🎬 Full URL: $videoUrl');
+      debugPrint('🎬 Base URL: ${ApiConfig.baseUrl}');
+      debugPrint('🎬 ═══════════════════════════════════════════════════');
       
-      _videoController = VideoPlayerController.networkUrl(Uri.parse(videoUrl));
+      // Pre-flight connectivity test using HTTP
+      debugPrint('🔗 Testing server connectivity...');
+      try {
+        final testResponse = await http.head(
+          Uri.parse(videoUrl),
+        ).timeout(const Duration(seconds: 5));
+        debugPrint('🔗 ✅ Server reachable! Status: ${testResponse.statusCode}');
+        debugPrint('🔗 Content-Type: ${testResponse.headers['content-type']}');
+        debugPrint('🔗 Content-Length: ${testResponse.headers['content-length']}');
+      } catch (connectError) {
+        debugPrint('🔗 ❌ Connectivity test FAILED: $connectError');
+        debugPrint('🔗 ⚠️ This means the phone cannot reach the backend server.');
+        debugPrint('🔗 ⚠️ Check: 1) Windows Firewall allows port 8000');
+        debugPrint('🔗 ⚠️ Check: 2) Server running with --host 0.0.0.0');
+        debugPrint('🔗 ⚠️ Check: 3) IP address ${ApiConfig.baseUrl} is correct');
+        // Continue anyway to get the actual video player error
+      }
       
-      await _videoController!.initialize();
-      _videoController!.setLooping(true);
-      _videoController!.play();
+      _videoController = VideoPlayerController.networkUrl(
+        Uri.parse(videoUrl),
+        videoPlayerOptions: VideoPlayerOptions(mixWithOthers: true),
+      );
       
-      setState(() => _isLoading = false);
-    } catch (e) {
-      // If video stream fails, show placeholder
-      debugPrint('Video initialization error: $e');
-      setState(() {
-        _isLoading = false;
-        _hasError = true;
+      // Add listener for errors
+      _videoController!.addListener(() {
+        if (_videoController!.value.hasError) {
+          debugPrint('❌ Video Player Error: ${_videoController!.value.errorDescription}');
+        }
       });
+      
+      debugPrint('🎬 Initializing video controller...');
+      await _videoController!.initialize();
+      debugPrint('🎬 ✅ Video initialized successfully!');
+      debugPrint('🎬 Duration: ${_videoController!.value.duration}');
+      debugPrint('🎬 Size: ${_videoController!.value.size}');
+      
+      _videoController!.setLooping(true);
+      _videoController!.setVolume(0); // Mute for CCTV simulation
+      await _videoController!.play();
+      debugPrint('🎬 ▶️ Video playing');
+      
+      // Simulate ML analysis
+      _simulateActivity();
+      
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    } catch (e, stackTrace) {
+      debugPrint('');
+      debugPrint('❌ ═══════════════════════════════════════════════════');
+      debugPrint('❌ VIDEO ERROR');
+      debugPrint('❌ ═══════════════════════════════════════════════════');
+      debugPrint('❌ Error type: ${e.runtimeType}');
+      debugPrint('❌ Error: $e');
+      debugPrint('❌ Stack trace: $stackTrace');
+      debugPrint('❌ ═══════════════════════════════════════════════════');
+      
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _hasError = true;
+          _errorMessage = e.toString();
+        });
+      }
     }
+  }
+  
+  /// Simulate activity detection (will be replaced with real ML later)
+  void _simulateActivity() {
+    final random = Random();
+    final activities = ['Walking', 'Sitting', 'Standing', 'Resting', 'Moving'];
+    final risks = ['Low', 'Low', 'Low', 'Medium', 'Low'];
+    
+    setState(() {
+      _currentActivity = activities[random.nextInt(activities.length)];
+      _currentConfidence = '${80 + random.nextInt(15)}%';
+      _fallRisk = risks[random.nextInt(risks.length)];
+    });
   }
 
   @override
@@ -95,16 +196,17 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
     super.dispose();
   }
 
-  void _selectCamera(int index) {
-    if (index != _selectedCameraIndex) {
-      setState(() => _selectedCameraIndex = index);
+  void _selectElderly(ElderlyInfo elderly) {
+    if (_selectedElderly?.id != elderly.id) {
+      setState(() => _selectedElderly = elderly);
       _initializeVideo();
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final selectedCamera = _cameras[_selectedCameraIndex];
+    final connectionState = ref.watch(connectionProvider);
+    final elderlyList = connectionState.linkedElderly;
     
     return Scaffold(
       body: Container(
@@ -119,210 +221,364 @@ class _LiveMonitorScreenState extends State<LiveMonitorScreen> {
           child: Column(
             children: [
               // Header
-              Padding(
-                padding: const EdgeInsets.all(20),
-                child: Row(
-                  children: [
-                    GestureDetector(
-                      onTap: () => Navigator.pop(context),
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(10)),
-                        child: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Live Monitor', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-                          Row(
-                            children: [
-                              Container(width: 8, height: 8, decoration: const BoxDecoration(color: AppColors.neonRed, shape: BoxShape.circle)),
-                              const SizedBox(width: 6),
-                              const Text('DEMO MODE', style: TextStyle(fontSize: 10, color: AppColors.neonRed, fontWeight: FontWeight.w600)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    Container(
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(10)),
-                      child: const Icon(Icons.fullscreen, color: AppColors.textSecondary),
-                    ),
-                  ],
-                ),
-              ),
+              _buildHeader(),
               
               // Main Video Feed
               Expanded(
                 flex: 3,
-                child: Container(
-                  margin: const EdgeInsets.symmetric(horizontal: 20),
-                  decoration: BoxDecoration(
-                    color: AppColors.surface,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(color: AppColors.neonCyan, width: 2),
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        // Video or Placeholder
-                        if (_isLoading)
-                          const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
-                        else if (_hasError || _videoController == null || !_videoController!.value.isInitialized)
-                          _buildVideoPlaceholder(selectedCamera)
-                        else
-                          AspectRatio(
-                            aspectRatio: _videoController!.value.aspectRatio,
-                            child: VideoPlayer(_videoController!),
-                          ),
-                        
-                        // Overlay Info
-                        Positioned(
-                          top: 12,
-                          left: 12,
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
-                                child: Row(
-                                  children: [
-                                    Container(width: 8, height: 8, decoration: BoxDecoration(color: selectedCamera['status'] == 'Online' ? AppColors.neonGreen : AppColors.neonRed, shape: BoxShape.circle)),
-                                    const SizedBox(width: 6),
-                                    Text(selectedCamera['name'], style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600)),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(height: 6),
-                              // ML Scenario Tag
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(color: AppColors.neonCyan.withOpacity(0.8), borderRadius: BorderRadius.circular(4)),
-                                child: Text('ML: ${selectedCamera['scenario']}', style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ],
-                          ),
-                        ),
-                        
-                        // Timestamp
-                        Positioned(
-                          bottom: 12,
-                          right: 12,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.access_time, color: AppColors.neonCyan, size: 14),
-                                const SizedBox(width: 6),
-                                Text(
-                                  _currentTimestamp,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 11,
-                                    fontFamily: 'monospace',
-                                    fontWeight: FontWeight.w500,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
+                child: _buildVideoFeed(),
               ),
+              
+              const SizedBox(height: 12),
+              
+              // Activity Stats
+              _buildActivityStats(),
+              
+              const SizedBox(height: 12),
+              
+              // Elderly Selection
+              _buildElderlySelection(elderlyList, connectionState.isLoading),
               
               const SizedBox(height: 16),
-              
-              // Camera Grid
-              Expanded(
-                flex: 2,
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('All Cameras', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                      const SizedBox(height: 10),
-                      Expanded(
-                        child: GridView.builder(
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 2, childAspectRatio: 1.5, crossAxisSpacing: 10, mainAxisSpacing: 10),
-                          itemCount: _cameras.length,
-                          itemBuilder: (context, index) => _buildCameraTile(index),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              
-              const SizedBox(height: 20),
             ],
           ),
         ),
       ),
     );
   }
-
-  Widget _buildVideoPlaceholder(Map<String, dynamic> camera) {
+  
+  Widget _buildHeader() {
+    return Padding(
+      padding: const EdgeInsets.all(20),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: AppColors.surfaceLight, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.arrow_back, color: AppColors.textPrimary),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Live Monitor', style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                Text(
+                  _selectedElderly != null 
+                      ? 'Watching ${_selectedElderly!.name}' 
+                      : 'Select an elderly to monitor',
+                  style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.neonRed.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(
+              children: [
+                Container(width: 6, height: 6, decoration: const BoxDecoration(color: AppColors.neonRed, shape: BoxShape.circle)),
+                const SizedBox(width: 4),
+                const Text('DEMO', style: TextStyle(fontSize: 10, color: AppColors.neonRed, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildVideoFeed() {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: _selectedElderly != null ? AppColors.neonCyan : AppColors.surfaceLight, 
+          width: 2,
+        ),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // Video or Placeholder
+            if (_selectedElderly == null)
+              _buildSelectElderlyPlaceholder()
+            else if (_isLoading)
+              const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
+            else if (_hasError || _videoController == null || !_videoController!.value.isInitialized)
+              _buildVideoPlaceholder()
+            else
+              FittedBox(
+                fit: BoxFit.cover,
+                child: SizedBox(
+                  width: _videoController!.value.size.width,
+                  height: _videoController!.value.size.height,
+                  child: VideoPlayer(_videoController!),
+                ),
+              ),
+            
+            // Overlay - Status Badge
+            if (_selectedElderly != null)
+              Positioned(
+                top: 12,
+                left: 12,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(6)),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 8, height: 8, 
+                            decoration: BoxDecoration(
+                              color: _hasError ? AppColors.neonRed : AppColors.neonGreen, 
+                              shape: BoxShape.circle,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            _hasError ? 'OFFLINE' : 'LIVE', 
+                            style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    if (!_hasError && demoVideos[_currentVideoId] != null)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(color: AppColors.neonCyan.withOpacity(0.8), borderRadius: BorderRadius.circular(4)),
+                        child: Text(
+                          'ML: ${demoVideos[_currentVideoId]}', 
+                          style: const TextStyle(color: Colors.black, fontSize: 10, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            
+            // Timestamp
+            Positioned(
+              bottom: 12,
+              right: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(8)),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.access_time, color: AppColors.neonCyan, size: 14),
+                    const SizedBox(width: 6),
+                    Text(
+                      _currentTimestamp,
+                      style: const TextStyle(color: Colors.white, fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.w500),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildSelectElderlyPlaceholder() {
     return Container(
       color: AppColors.surfaceLight,
-      child: Center(
+      child: const Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              camera['status'] == 'Online' ? Icons.videocam : Icons.videocam_off,
-              size: 48,
-              color: camera['status'] == 'Online' ? AppColors.neonCyan : AppColors.textSecondary,
-            ),
-            const SizedBox(height: 12),
-            Text(
-              camera['status'] == 'Online' ? 'Simulated Feed' : 'Camera Offline',
-              style: TextStyle(color: camera['status'] == 'Online' ? AppColors.neonCyan : AppColors.textSecondary),
-            ),
-            const SizedBox(height: 4),
-            const Text('Pre-recorded video for demo', style: TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+            Icon(Icons.videocam_off, size: 48, color: AppColors.textSecondary),
+            SizedBox(height: 12),
+            Text('Select an elderly to start monitoring', style: TextStyle(color: AppColors.textSecondary)),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildCameraTile(int index) {
-    final camera = _cameras[index];
-    final isSelected = _selectedCameraIndex == index;
-    final isOnline = camera['status'] == 'Online';
-    
-    return GestureDetector(
-      onTap: isOnline ? () => _selectCamera(index) : null,
+  Widget _buildVideoPlaceholder() {
+    return Container(
+      color: AppColors.surfaceLight,
+      child: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.error_outline, size: 48, color: AppColors.neonOrange),
+            const SizedBox(height: 12),
+            const Text('Video stream unavailable', style: TextStyle(color: AppColors.textSecondary)),
+            const SizedBox(height: 4),
+            Text(
+              _errorMessage.length > 50 ? 'Connection error' : _errorMessage,
+              style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            TextButton.icon(
+              onPressed: _initializeVideo,
+              icon: const Icon(Icons.refresh, size: 16),
+              label: const Text('Retry'),
+              style: TextButton.styleFrom(foregroundColor: AppColors.neonCyan),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildActivityStats() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 20),
       child: GlassmorphicCard(
-        glowColor: isSelected ? AppColors.neonCyan : null,
-        glowIntensity: 0.15,
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceAround,
+          children: [
+            _buildStatItem(Icons.directions_walk, _currentActivity, 'Activity', AppColors.neonCyan),
+            Container(width: 1, height: 30, color: AppColors.surfaceLight),
+            _buildStatItem(Icons.check_circle, _currentConfidence, 'Confidence', AppColors.neonGreen),
+            Container(width: 1, height: 30, color: AppColors.surfaceLight),
+            _buildStatItem(
+              Icons.warning_amber, 
+              _fallRisk, 
+              'Fall Risk', 
+              _fallRisk == 'Medium' ? AppColors.neonOrange : AppColors.neonGreen,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildStatItem(IconData icon, String value, String label, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 20),
+        const SizedBox(height: 4),
+        Text(value, style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: color)),
+        Text(label, style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+      ],
+    );
+  }
+  
+  Widget _buildElderlySelection(List<ElderlyInfo> elderlyList, bool isLoading) {
+    return Expanded(
+      flex: 2,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Icon(isOnline ? Icons.videocam : Icons.videocam_off, color: isOnline ? AppColors.neonCyan : AppColors.textSecondary, size: 18),
-                Container(width: 8, height: 8, decoration: BoxDecoration(color: isOnline ? AppColors.neonGreen : AppColors.neonRed, shape: BoxShape.circle)),
-              ],
+            const Text('Select Elderly', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
+            const SizedBox(height: 10),
+            Expanded(
+              child: isLoading
+                  ? const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
+                  : elderlyList.isEmpty
+                      ? _buildNoElderlyMessage()
+                      : ListView.builder(
+                          itemCount: elderlyList.length,
+                          itemBuilder: (context, index) => _buildElderlyTile(elderlyList[index]),
+                        ),
             ),
-            const Spacer(),
-            Text(camera['name'], style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: isOnline ? AppColors.textPrimary : AppColors.textSecondary)),
-            Text(camera['location'], style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildNoElderlyMessage() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.people_outline, size: 40, color: AppColors.textSecondary),
+          const SizedBox(height: 8),
+          const Text('No connected elderly', style: TextStyle(color: AppColors.textSecondary)),
+          const SizedBox(height: 4),
+          TextButton(
+            onPressed: () => Navigator.pushNamed(context, '/connections'),
+            child: const Text('Add Connection', style: TextStyle(color: AppColors.neonCyan)),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildElderlyTile(ElderlyInfo elderly) {
+    final isSelected = _selectedElderly?.id == elderly.id;
+    
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassmorphicCard(
+        glowColor: isSelected ? AppColors.neonCyan : null,
+        glowIntensity: 0.15,
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 20,
+              backgroundColor: isSelected ? AppColors.neonCyan.withOpacity(0.2) : AppColors.surfaceLight,
+              child: Icon(Icons.elderly, color: isSelected ? AppColors.neonCyan : AppColors.textSecondary),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    elderly.name,
+                    style: TextStyle(
+                      fontSize: 14, 
+                      fontWeight: FontWeight.w600, 
+                      color: isSelected ? AppColors.neonCyan : AppColors.textPrimary,
+                    ),
+                  ),
+                  Row(
+                    children: [
+                      Container(
+                        width: 6, height: 6,
+                        decoration: const BoxDecoration(color: AppColors.neonGreen, shape: BoxShape.circle),
+                      ),
+                      const SizedBox(width: 4),
+                      const Text('Last active: 2 min ago', style: TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            GestureDetector(
+              onTap: () => _selectElderly(elderly),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isSelected ? AppColors.neonCyan : AppColors.surfaceLight,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  isSelected ? 'Watching' : 'Watch',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isSelected ? Colors.black : AppColors.neonCyan,
+                  ),
+                ),
+              ),
+            ),
           ],
         ),
       ),
