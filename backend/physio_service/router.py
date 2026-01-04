@@ -528,3 +528,372 @@ async def exercise_session_stream(websocket: WebSocket, session_id: str):
         # Mark session as paused
         if session:
             session.state = SessionState.PAUSED
+
+
+# ============= Video Comparison Endpoints =============
+
+class VideoCompareRequest(BaseModel):
+    reference_video_path: str
+    comparison_video_path: str
+    exercise_type: str = "chair_stand"
+    sample_rate: int = 10  # Analyze every Nth frame
+
+
+@router.post("/compare-videos")
+async def compare_videos(request: VideoCompareRequest):
+    """
+    Compare two exercise videos and calculate similarity score.
+    
+    Uses pose estimation to extract joint angles and compares
+    the movement patterns between reference and comparison videos.
+    """
+    pose_analyzer, _ = get_services()
+    
+    # Validate exercise type
+    try:
+        ex_type = ExerciseType(request.exercise_type)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid exercise type. Valid types: {[e.value for e in ExerciseType]}"
+        )
+    
+    # Check if files exist
+    if not os.path.exists(request.reference_video_path):
+        raise HTTPException(status_code=404, detail=f"Reference video not found: {request.reference_video_path}")
+    if not os.path.exists(request.comparison_video_path):
+        raise HTTPException(status_code=404, detail=f"Comparison video not found: {request.comparison_video_path}")
+    
+    # Extract poses from both videos
+    ref_poses = _extract_poses_from_video(pose_analyzer, request.reference_video_path, request.sample_rate)
+    comp_poses = _extract_poses_from_video(pose_analyzer, request.comparison_video_path, request.sample_rate)
+    
+    if not ref_poses or not comp_poses:
+        return {
+            "status": "error",
+            "message": "Could not extract poses from one or both videos",
+            "reference_frames": len(ref_poses),
+            "comparison_frames": len(comp_poses)
+        }
+    
+    # Compare poses and calculate similarity
+    similarity_results = _compare_pose_sequences(pose_analyzer, ref_poses, comp_poses, ex_type)
+    
+    return {
+        "status": "completed",
+        "exercise_type": request.exercise_type,
+        "reference_video": os.path.basename(request.reference_video_path),
+        "comparison_video": os.path.basename(request.comparison_video_path),
+        "reference_frames_analyzed": len(ref_poses),
+        "comparison_frames_analyzed": len(comp_poses),
+        "similarity": similarity_results
+    }
+
+
+@router.get("/analyze-local-video/{video_name}")
+async def analyze_local_video(video_name: str, exercise_type: str = "chair_stand"):
+    """
+    Analyze a video from the local media/simulation_footage/physio/exercise folder.
+    """
+    pose_analyzer, _ = get_services()
+    
+    # Construct path to video
+    base_path = os.path.dirname(os.path.dirname(__file__))
+    video_path = os.path.join(base_path, "media", "simulation_footage", "physio", "exercise", video_name)
+    
+    if not os.path.exists(video_path):
+        raise HTTPException(status_code=404, detail=f"Video not found: {video_name}")
+    
+    # Validate exercise type
+    try:
+        ex_type = ExerciseType(exercise_type)
+    except ValueError:
+        ex_type = ExerciseType.CHAIR_STAND
+    
+    # Extract and analyze poses
+    poses = _extract_poses_from_video(pose_analyzer, video_path, sample_rate=5)
+    
+    if not poses:
+        return {
+            "status": "error",
+            "video": video_name,
+            "message": "Could not detect poses in video"
+        }
+    
+    # Analyze form for each pose
+    form_scores = []
+    all_feedback = []
+    joint_angle_history = []
+    
+    for pose in poses:
+        assessment = pose_analyzer.assess_form(pose, ex_type)
+        if assessment:
+            form_scores.append(assessment.score)
+            all_feedback.extend(assessment.feedback)
+            
+            # Get joint angles
+            angles = pose_analyzer.get_joint_angles(pose)
+            joint_angle_history.append(angles)
+    
+    avg_score = sum(form_scores) / len(form_scores) if form_scores else 0
+    unique_feedback = list(set(all_feedback))[:5]
+    
+    # Calculate average joint angles
+    avg_angles = {}
+    if joint_angle_history:
+        for key in joint_angle_history[0].keys():
+            values = [angles.get(key, 0) for angles in joint_angle_history]
+            avg_angles[key] = round(sum(values) / len(values), 1)
+    
+    return {
+        "status": "completed",
+        "video": video_name,
+        "exercise_type": exercise_type,
+        "frames_analyzed": len(poses),
+        "form_assessment": {
+            "average_score": round(avg_score, 1),
+            "quality": _score_to_quality(avg_score),
+            "feedback": unique_feedback
+        },
+        "average_joint_angles": avg_angles,
+        "analysis_timestamp": datetime.now().isoformat()
+    }
+
+
+@router.get("/compare-local-videos")
+async def compare_local_videos(
+    video1: str,
+    video2: str,
+    exercise_type: str = "chair_stand"
+):
+    """
+    Compare two local videos from the physio exercise folder.
+    
+    Example: /api/physio/compare-local-videos?video1=ex1.mp4&video2=ex2.mp4
+    """
+    pose_analyzer, _ = get_services()
+    
+    base_path = os.path.dirname(os.path.dirname(__file__))
+    video_dir = os.path.join(base_path, "media", "simulation_footage", "physio", "exercise")
+    
+    video1_path = os.path.join(video_dir, video1)
+    video2_path = os.path.join(video_dir, video2)
+    
+    if not os.path.exists(video1_path):
+        raise HTTPException(status_code=404, detail=f"Video not found: {video1}")
+    if not os.path.exists(video2_path):
+        raise HTTPException(status_code=404, detail=f"Video not found: {video2}")
+    
+    try:
+        ex_type = ExerciseType(exercise_type)
+    except ValueError:
+        ex_type = ExerciseType.CHAIR_STAND
+    
+    # Extract poses
+    poses1 = _extract_poses_from_video(pose_analyzer, video1_path, sample_rate=10)
+    poses2 = _extract_poses_from_video(pose_analyzer, video2_path, sample_rate=10)
+    
+    if not poses1 or not poses2:
+        return {
+            "status": "error",
+            "message": "Could not extract poses from one or both videos",
+            "video1_frames": len(poses1) if poses1 else 0,
+            "video2_frames": len(poses2) if poses2 else 0
+        }
+    
+    # Compare
+    similarity = _compare_pose_sequences(pose_analyzer, poses1, poses2, ex_type)
+    
+    # Also get individual form assessments
+    form1 = _assess_video_form(pose_analyzer, poses1, ex_type)
+    form2 = _assess_video_form(pose_analyzer, poses2, ex_type)
+    
+    return {
+        "status": "completed",
+        "video1": {
+            "name": video1,
+            "frames_analyzed": len(poses1),
+            "form_score": form1["score"],
+            "form_quality": form1["quality"]
+        },
+        "video2": {
+            "name": video2,
+            "frames_analyzed": len(poses2),
+            "form_score": form2["score"],
+            "form_quality": form2["quality"]
+        },
+        "comparison": similarity,
+        "analysis_timestamp": datetime.now().isoformat()
+    }
+
+
+@router.get("/list-exercise-videos")
+async def list_exercise_videos():
+    """List all available exercise videos in the media folder."""
+    base_path = os.path.dirname(os.path.dirname(__file__))
+    video_dir = os.path.join(base_path, "media", "simulation_footage", "physio", "exercise")
+    
+    if not os.path.exists(video_dir):
+        return {"videos": [], "path": video_dir, "error": "Directory not found"}
+    
+    videos = [f for f in os.listdir(video_dir) if f.endswith(('.mp4', '.avi', '.mov'))]
+    
+    return {
+        "videos": videos,
+        "count": len(videos),
+        "path": video_dir
+    }
+
+
+# ============= Helper Functions =============
+
+def _extract_poses_from_video(pose_analyzer: PoseAnalyzer, video_path: str, sample_rate: int = 10) -> List[PoseResult]:
+    """Extract pose results from video at specified sample rate."""
+    poses = []
+    
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        print(f"Could not open video: {video_path}")
+        return poses
+    
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    frame_count = 0
+    
+    while cap.isOpened():
+        ret, frame = cap.read()
+        if not ret:
+            break
+        
+        if frame_count % sample_rate == 0:
+            # Convert BGR to RGB
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            timestamp_ms = (frame_count / fps) * 1000
+            
+            pose = pose_analyzer.detect_pose(rgb_frame, timestamp_ms)
+            if pose:
+                poses.append(pose)
+        
+        frame_count += 1
+    
+    cap.release()
+    return poses
+
+
+def _compare_pose_sequences(
+    pose_analyzer: PoseAnalyzer,
+    poses1: List[PoseResult],
+    poses2: List[PoseResult],
+    exercise_type: ExerciseType
+) -> Dict[str, Any]:
+    """Compare two sequences of poses and calculate similarity metrics."""
+    
+    # Get joint angles for all poses
+    angles1 = [pose_analyzer.get_joint_angles(p) for p in poses1]
+    angles2 = [pose_analyzer.get_joint_angles(p) for p in poses2]
+    
+    if not angles1 or not angles2:
+        return {"overall_similarity": 0, "error": "No angles extracted"}
+    
+    # Key angles for comparison based on exercise type
+    key_angles = ["left_knee", "right_knee", "left_hip", "right_hip", "left_shoulder", "right_shoulder"]
+    
+    # Normalize sequence lengths using dynamic time warping concept (simplified)
+    min_len = min(len(angles1), len(angles2))
+    
+    # Sample to same length
+    step1 = len(angles1) / min_len
+    step2 = len(angles2) / min_len
+    
+    sampled1 = [angles1[int(i * step1)] for i in range(min_len)]
+    sampled2 = [angles2[int(i * step2)] for i in range(min_len)]
+    
+    # Calculate per-angle similarity
+    angle_similarities = {}
+    overall_diffs = []
+    
+    for angle_name in key_angles:
+        diffs = []
+        for a1, a2 in zip(sampled1, sampled2):
+            v1 = a1.get(angle_name, 0)
+            v2 = a2.get(angle_name, 0)
+            diff = abs(v1 - v2)
+            diffs.append(diff)
+        
+        avg_diff = sum(diffs) / len(diffs) if diffs else 0
+        # Convert to similarity (0-100), where 0 diff = 100% similar
+        # 45 degree diff = 0% similar
+        similarity = max(0, 100 - (avg_diff / 45 * 100))
+        angle_similarities[angle_name] = round(similarity, 1)
+        overall_diffs.append(avg_diff)
+    
+    # Overall similarity
+    overall_similarity = sum(angle_similarities.values()) / len(angle_similarities) if angle_similarities else 0
+    
+    # Movement pattern similarity (variance comparison)
+    pattern_score = _compare_movement_patterns(sampled1, sampled2, key_angles)
+    
+    return {
+        "overall_similarity": round(overall_similarity, 1),
+        "pattern_similarity": round(pattern_score, 1),
+        "combined_score": round((overall_similarity + pattern_score) / 2, 1),
+        "angle_similarities": angle_similarities,
+        "frames_compared": min_len
+    }
+
+
+def _compare_movement_patterns(angles1: List[Dict], angles2: List[Dict], key_angles: List[str]) -> float:
+    """Compare the movement patterns (variance and range) between two sequences."""
+    
+    pattern_scores = []
+    
+    for angle_name in key_angles:
+        values1 = [a.get(angle_name, 0) for a in angles1]
+        values2 = [a.get(angle_name, 0) for a in angles2]
+        
+        if not values1 or not values2:
+            continue
+        
+        # Compare range of motion
+        range1 = max(values1) - min(values1)
+        range2 = max(values2) - min(values2)
+        range_diff = abs(range1 - range2)
+        range_similarity = max(0, 100 - (range_diff / 90 * 100))
+        
+        # Compare variance (movement smoothness)
+        var1 = np.var(values1) if len(values1) > 1 else 0
+        var2 = np.var(values2) if len(values2) > 1 else 0
+        var_ratio = min(var1, var2) / max(var1, var2) if max(var1, var2) > 0 else 1
+        var_similarity = var_ratio * 100
+        
+        pattern_scores.append((range_similarity + var_similarity) / 2)
+    
+    return sum(pattern_scores) / len(pattern_scores) if pattern_scores else 0
+
+
+def _assess_video_form(pose_analyzer: PoseAnalyzer, poses: List[PoseResult], exercise_type: ExerciseType) -> Dict[str, Any]:
+    """Assess overall form quality for a video."""
+    scores = []
+    
+    for pose in poses:
+        assessment = pose_analyzer.assess_form(pose, exercise_type)
+        if assessment:
+            scores.append(assessment.score)
+    
+    avg_score = sum(scores) / len(scores) if scores else 0
+    
+    return {
+        "score": round(avg_score, 1),
+        "quality": _score_to_quality(avg_score)
+    }
+
+
+def _score_to_quality(score: float) -> str:
+    """Convert numeric score to quality label."""
+    if score >= 90:
+        return "excellent"
+    elif score >= 75:
+        return "good"
+    elif score >= 50:
+        return "fair"
+    else:
+        return "poor"
