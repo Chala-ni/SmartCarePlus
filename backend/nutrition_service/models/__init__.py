@@ -27,6 +27,14 @@ from .meal_planner import (
     get_meal_logger
 )
 
+from .food_classifier import (
+    FoodClassifier,
+    FoodPrediction,
+    ClassificationResult,
+    FOOD_101_CLASSES,
+    get_food_classifier
+)
+
 __all__ = [
     # USDA Client
     "USDAClient",
@@ -47,4 +55,10 @@ __all__ = [
     "DietaryRestriction",
     "get_meal_plan_generator",
     "get_meal_logger",
+    # Food Classifier
+    "FoodClassifier",
+    "FoodPrediction",
+    "ClassificationResult",
+    "FOOD_101_CLASSES",
+    "get_food_classifier",
 ]

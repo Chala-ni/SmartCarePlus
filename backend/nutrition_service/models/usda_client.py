@@ -495,24 +495,50 @@ class LocalFoodDatabase:
             with open(self.data_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             
-            for item in data.get("foods", []):
+            # Handle both list format and dict format
+            if isinstance(data, list):
+                foods_list = data
+            elif isinstance(data, dict):
+                foods_list = data.get("foods", [])
+            else:
+                print(f"Warning: Unexpected data format in {self.data_path}")
+                return
+            
+            for item in foods_list:
+                # Handle Sri Lankan food format from foods.json
+                food_id = item.get("food_id", item.get("id", 0))
+                food_name = item.get("name", "Unknown")
+                
                 food = FoodItem(
-                    fdc_id=item.get("id", 0),
-                    name=item.get("name", "Unknown"),
-                    category=item.get("category"),
-                    serving_size=item.get("serving_size", 100),
-                    serving_unit=item.get("serving_unit", "g"),
-                    calories=item.get("calories", 0),
-                    protein=item.get("protein", 0),
-                    carbohydrates=item.get("carbs", 0),
-                    fat=item.get("fat", 0),
-                    fiber=item.get("fiber", 0),
+                    fdc_id=hash(food_id) if isinstance(food_id, str) else food_id,
+                    name=food_name,
+                    category=item.get("cuisine", item.get("category")),
+                    serving_size=100,  # Default serving size
+                    serving_unit="g",
+                    calories=item.get("calories_per_serving", item.get("calories", 0)),
+                    protein=item.get("protein_g", item.get("protein", 0)),
+                    carbohydrates=item.get("carbs_g", item.get("carbs", 0)),
+                    fat=item.get("fat_g", item.get("fat", 0)),
+                    fiber=item.get("fiber_g", item.get("fiber", 0)),
                     sugar=item.get("sugar", 0),
-                    sodium=item.get("sodium", 0),
+                    sodium=item.get("sodium_mg", item.get("sodium", 0)),
                 )
                 
+                # Store additional metadata
+                food.food_id = food_id
+                food.description = item.get("description", "")
+                food.meal_types = item.get("meal_type", [])
+                food.is_vegetarian = item.get("is_vegetarian", False)
+                food.suitable_for_diabetes = item.get("suitable_for_diabetes", False)
+                food.suitable_for_hypertension = item.get("suitable_for_hypertension", False)
+                food.elderly_benefits = item.get("elderly_benefits", [])
+                
                 # Index by name (lowercase for searching)
-                self.foods[item["name"].lower()] = food
+                self.foods[food_name.lower()] = food
+                
+                # Also index by food_id if it's a string
+                if isinstance(food_id, str):
+                    self.foods[food_id.lower()] = food
             
             print(f"✅ Loaded {len(self.foods)} foods from local database")
         
@@ -530,27 +556,51 @@ class LocalFoodDatabase:
         Returns:
             List of matching FoodItems
         """
-        query_lower = query.lower()
+        query_lower = query.lower().strip()
         matches = []
+        seen_names = set()  # Avoid duplicates
         
         for name, food in self.foods.items():
-            if query_lower in name:
+            if query_lower in name and food.name.lower() not in seen_names:
                 matches.append(food)
-                if len(matches) >= limit:
-                    break
+                seen_names.add(food.name.lower())
         
-        # Sort by relevance (exact match first, then starts with, then contains)
-        def relevance(food: FoodItem) -> int:
+        # Sort by relevance:
+        # Priority: exact match > starts with > complete word match > partial match
+        # Secondary: word position (earlier is better)
+        # Tertiary: shorter names are better
+        def relevance(food: FoodItem) -> tuple:
             name = food.name.lower()
+            words = name.split()
+            
+            # Check if query is a complete word in the name
+            is_complete_word = query_lower in words
+            
+            # Find position of word containing query
+            word_position = 10  # Default high if not found
+            for i, word in enumerate(words):
+                if query_lower in word:
+                    word_position = i
+                    break
+            
+            # Exact match gets highest priority
             if name == query_lower:
-                return 0
+                return (0, 0, 0, len(name))
+            
+            # Name starts with query (e.g., "Apple Pie" for "apple")
             if name.startswith(query_lower):
-                return 1
-            return 2
+                return (1, 0, 0, len(name))
+            
+            # Complete word match vs partial (prefer "Apple" over "Pineapple")
+            if is_complete_word:
+                return (2, word_position, 0, len(name))
+            
+            # Partial match (query is part of a word)
+            return (3, word_position, 1, len(name))
         
         matches.sort(key=relevance)
         
-        return matches
+        return matches[:limit]
     
     def get_by_name(self, name: str) -> Optional[FoodItem]:
         """Get food by exact name match."""

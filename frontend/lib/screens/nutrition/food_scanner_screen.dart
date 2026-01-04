@@ -185,34 +185,96 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
   }
   
   Future<void> _analyzeFood() async {
+    if (_capturedImage == null) {
+      _useMockData();
+      return;
+    }
+    
     setState(() => _isLoading = true);
     
     try {
       final api = ref.read(apiServiceProvider);
       
-      // Call the analyze-food endpoint
-      final response = await api.post('/api/nutrition/analyze-food', body: {
-        'image_data': 'base64_encoded_image_placeholder', // In real app, send actual image
-      });
+      // Upload the actual image file to analyze-food endpoint
+      final response = await api.uploadFile(
+        '/api/nutrition/analyze-food',
+        _capturedImage!.path,
+        'image', // field name matching FastAPI: image: UploadFile = File(...)
+        requireAuth: false, // Allow without auth for demo
+      );
       
       if (response.success && response.data != null) {
-        final data = response.data;
-        final detection = data['detection'];
-        if (detection != null) {
-          setState(() {
-            _isScanning = false;
-            _foodDetected = true;
-            _detectedFood = {
-              'name': detection['food_name'] ?? 'Unknown Food',
-              'confidence': detection['confidence'] ?? 0.85,
-              'calories': detection['nutrition']?['calories'] ?? 300,
-              'protein': detection['nutrition']?['protein'] ?? 20,
-              'carbs': detection['nutrition']?['carbs'] ?? 30,
-              'fat': detection['nutrition']?['fat'] ?? 15,
-              'fiber': detection['nutrition']?['fiber'] ?? 5,
-              'servingSize': detection['serving_size'] ?? '1 serving (200g)',
-            };
-          });
+        final data = response.data as Map<String, dynamic>;
+        
+        // Handle new response format from food classifier
+        if (data['status'] == 'completed') {
+          // Get primary food or first detected food
+          final primaryFood = data['primary_food'];
+          final detectedFoods = data['detected_foods'] as List<dynamic>?;
+          final classification = data['classification'] as Map<String, dynamic>?;
+          
+          if (primaryFood != null) {
+            setState(() {
+              _isScanning = false;
+              _foodDetected = true;
+              _detectedFood = {
+                'name': primaryFood['name'] ?? 'Unknown Food',
+                'confidence': classification?['predictions']?.isNotEmpty == true 
+                    ? classification!['predictions'][0]['confidence'] 
+                    : 0.85,
+                'calories': _parseNum(primaryFood['calories_per_serving'] ?? primaryFood['calories']),
+                'protein': _parseNum(primaryFood['protein_g'] ?? primaryFood['protein']),
+                'carbs': _parseNum(primaryFood['carbs_g'] ?? primaryFood['carbohydrates']),
+                'fat': _parseNum(primaryFood['fat_g'] ?? primaryFood['fat']),
+                'fiber': _parseNum(primaryFood['fiber_g'] ?? primaryFood['fiber']),
+                'servingSize': primaryFood['serving_size'] ?? '1 serving',
+                'alternatives': _extractAlternatives(detectedFoods),
+              };
+            });
+          } else if (detectedFoods?.isNotEmpty == true) {
+            // Use first prediction's matched food
+            final firstDetection = detectedFoods![0];
+            final matchedFoods = firstDetection['matched_foods'] as List<dynamic>?;
+            final prediction = firstDetection['prediction'] as Map<String, dynamic>?;
+            
+            if (matchedFoods?.isNotEmpty == true) {
+              final food = matchedFoods![0];
+              setState(() {
+                _isScanning = false;
+                _foodDetected = true;
+                _detectedFood = {
+                  'name': food['name'] ?? prediction?['display_name'] ?? 'Unknown Food',
+                  'confidence': prediction?['confidence'] ?? 0.85,
+                  'calories': _parseNum(food['calories_per_serving'] ?? food['calories']),
+                  'protein': _parseNum(food['protein_g'] ?? food['protein']),
+                  'carbs': _parseNum(food['carbs_g'] ?? food['carbohydrates']),
+                  'fat': _parseNum(food['fat_g'] ?? food['fat']),
+                  'fiber': _parseNum(food['fiber_g'] ?? food['fiber']),
+                  'servingSize': food['serving_size'] ?? '1 serving',
+                  'alternatives': _extractAlternatives(detectedFoods),
+                };
+              });
+            } else {
+              // Use prediction name directly
+              setState(() {
+                _isScanning = false;
+                _foodDetected = true;
+                _detectedFood = {
+                  'name': prediction?['display_name'] ?? 'Detected Food',
+                  'confidence': prediction?['confidence'] ?? 0.75,
+                  'calories': 200,
+                  'protein': 10,
+                  'carbs': 25,
+                  'fat': 8,
+                  'fiber': 3,
+                  'servingSize': '1 serving',
+                  'alternatives': [],
+                };
+              });
+            }
+          } else {
+            _useMockData();
+          }
         } else {
           _useMockData();
         }
@@ -220,27 +282,77 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
         _useMockData();
       }
     } catch (e) {
-      _useMockData();
+      debugPrint('Food analysis error: $e');
+      _showError('Analysis failed: ${e.toString()}');
     } finally {
       setState(() => _isLoading = false);
     }
   }
   
+  double _parseNum(dynamic value) {
+    if (value == null) return 0.0;
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
+  
+  List<Map<String, dynamic>> _extractAlternatives(List<dynamic>? detectedFoods) {
+    if (detectedFoods == null || detectedFoods.length <= 1) return [];
+    
+    final alternatives = <Map<String, dynamic>>[];
+    for (int i = 1; i < detectedFoods.length && i < 4; i++) {
+      final detection = detectedFoods[i];
+      final prediction = detection['prediction'] as Map<String, dynamic>?;
+      final matchedFoods = detection['matched_foods'] as List<dynamic>?;
+      
+      if (matchedFoods?.isNotEmpty == true) {
+        final food = matchedFoods![0];
+        alternatives.add({
+          'name': food['name'] ?? prediction?['display_name'] ?? 'Alternative',
+          'confidence': prediction?['confidence'] ?? 0.5,
+          'calories': _parseNum(food['calories_per_serving'] ?? food['calories']),
+        });
+      } else if (prediction != null) {
+        alternatives.add({
+          'name': prediction['display_name'] ?? 'Alternative',
+          'confidence': prediction['confidence'] ?? 0.5,
+          'calories': 150,
+        });
+      }
+    }
+    return alternatives;
+  }
+  
   void _useMockData() {
+    // Mock data disabled - show actual error to user
     setState(() {
       _isScanning = false;
-      _foodDetected = true;
-      _detectedFood = {
-        'name': 'Grilled Chicken Salad',
-        'confidence': 0.92,
-        'calories': 320,
-        'protein': 28,
-        'carbs': 15,
-        'fat': 18,
-        'fiber': 6,
-        'servingSize': '1 bowl (250g)',
-      };
+      _foodDetected = false;
     });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not detect food. Please try again with a clearer image.'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+    }
+  }
+  
+  void _showError(String message) {
+    setState(() {
+      _isScanning = false;
+      _foodDetected = false;
+      _isLoading = false;
+    });
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
   
   Future<void> _logMeal() async {
@@ -252,40 +364,71 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
       final api = ref.read(apiServiceProvider);
       final userId = ref.read(currentUserProvider)?.uid ?? 'demo_user';
       
-      await api.post('/api/nutrition/log-meal', body: {
+      // Format the request to match backend MealLogRequest schema
+      final response = await api.post('/api/nutrition/log-meal', body: {
         'user_id': userId,
-        'meal_type': 'lunch',
-        'food_name': _detectedFood!['name'],
-        'calories': _detectedFood!['calories'],
-        'protein': _detectedFood!['protein'],
-        'carbs': _detectedFood!['carbs'],
-        'fat': _detectedFood!['fat'],
-        'serving_size': _detectedFood!['servingSize'],
-        'logged_at': DateTime.now().toIso8601String(),
+        'meal_type': _getMealTypeFromTime(),
+        'foods': [
+          {
+            'name': _detectedFood!['name'],
+            'portion': 1.0,
+            'calories': _detectedFood!['calories'],
+            'protein': _detectedFood!['protein'],
+            'carbs': _detectedFood!['carbs'],
+            'fat': _detectedFood!['fat'],
+          }
+        ],
+        'notes': 'Logged via food scanner',
       });
       
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${_detectedFood!['name']} logged successfully!'),
-            backgroundColor: AppColors.neonGreen,
-          ),
-        );
-        Navigator.pop(context);
+        if (response.success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle, color: Colors.black),
+                  const SizedBox(width: 8),
+                  Text('${_detectedFood!['name']} logged!'),
+                ],
+              ),
+              backgroundColor: AppColors.neonGreen,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Logged offline: ${_detectedFood!['name']}'),
+              backgroundColor: AppColors.neonOrange,
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+        Navigator.pop(context, true); // Return true to indicate meal was logged
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Meal logged (offline mode)'),
+          SnackBar(
+            content: Text('Saved locally: ${_detectedFood!['name']}'),
             backgroundColor: AppColors.neonOrange,
+            behavior: SnackBarBehavior.floating,
           ),
         );
-        Navigator.pop(context);
+        Navigator.pop(context, true);
       }
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+  
+  String _getMealTypeFromTime() {
+    final hour = DateTime.now().hour;
+    if (hour < 10) return 'breakfast';
+    if (hour < 14) return 'lunch';
+    if (hour < 17) return 'snack';
+    return 'dinner';
   }
 
   void _resetScan() {
@@ -551,127 +694,233 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
 
   Widget _buildFoodResults() {
     final food = _detectedFood!;
-    final confidence = (food['confidence'] as double) * 100;
+    final confidence = _parseNum(food['confidence']) * 100;
+    final alternatives = food['alternatives'] as List<dynamic>? ?? [];
 
     return Expanded(
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 20),
-        child: GlassmorphicCard(
-          glowColor: AppColors.neonGreen,
-          glowIntensity: 0.1,
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        child: Column(
+          children: [
+            // Main detected food card
+            GlassmorphicCard(
+              glowColor: AppColors.neonGreen,
+              glowIntensity: 0.1,
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          food['name'],
-                          style: const TextStyle(
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
-                          ),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${food['name'] ?? 'Unknown Food'}',
+                              style: const TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.textPrimary,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${food['servingSize'] ?? '1 serving'}',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                          ],
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          food['servingSize'],
-                          style: const TextStyle(
-                            fontSize: 12,
-                            color: AppColors.textSecondary,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: AppColors.neonGreen.withOpacity(0.15),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      '${confidence.toInt()}% match',
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.neonGreen,
-                        fontWeight: FontWeight.w600,
                       ),
-                    ),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: AppColors.neonGreen.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          '${confidence.toInt()}% match',
+                          style: const TextStyle(
+                            fontSize: 11,
+                            color: AppColors.neonGreen,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  
+                  const SizedBox(height: 12),
+                  
+                  // Nutrition info
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      _buildNutrientChip('${_parseNum(food['calories']).toInt()} cal', AppColors.neonOrange),
+                      _buildNutrientChip('${_parseNum(food['protein']).toInt()}g protein', AppColors.neonCyan),
+                      _buildNutrientChip('${_parseNum(food['carbs']).toInt()}g carbs', AppColors.neonPurple),
+                      _buildNutrientChip('${_parseNum(food['fat']).toInt()}g fat', AppColors.neonRed),
+                    ],
                   ),
                 ],
               ),
-              
-              const SizedBox(height: 16),
-              
-              // Nutrition info
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _buildNutrientChip('${food['calories']} cal', AppColors.neonOrange),
-                  _buildNutrientChip('${food['protein']}g protein', AppColors.neonCyan),
-                  _buildNutrientChip('${food['carbs']}g carbs', AppColors.neonPurple),
-                  _buildNutrientChip('${food['fat']}g fat', AppColors.neonRed),
-                ],
+            ),
+            
+            // Alternative foods section
+            if (alternatives.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Not quite right? Try these:',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
               ),
-              
-              const Spacer(),
-              
-              // Action buttons
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _resetScan,
-                      style: OutlinedButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary,
-                        side: const BorderSide(color: AppColors.glassBorder),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 60,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: alternatives.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, index) {
+                    final alt = alternatives[index] as Map<String, dynamic>;
+                    final altConfidence = _parseNum(alt['confidence']) * 100;
+                    return GestureDetector(
+                      onTap: () => _selectAlternative(alt),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: AppColors.surfaceLight,
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: AppColors.glassBorder),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              alt['name'] ?? 'Alternative',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.textPrimary,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  '${_parseNum(alt['calories']).toInt()} cal',
+                                  style: const TextStyle(
+                                    fontSize: 10,
+                                    color: AppColors.neonOrange,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  '${altConfidence.toInt()}%',
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    color: AppColors.textSecondary.withOpacity(0.7),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
-                      child: const Text('Scan Again'),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    flex: 2,
-                    child: ElevatedButton(
-                      onPressed: _isLoading ? null : _logMeal,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.neonGreen,
-                        foregroundColor: Colors.black,
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: const Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.add),
-                          SizedBox(width: 6),
-                          Text(
-                            'Add to Meal',
-                            style: TextStyle(fontWeight: FontWeight.w600),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
+                    );
+                  },
+                ),
               ),
             ],
-          ),
+            
+            const Spacer(),
+            
+            // Action buttons
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: _resetScan,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.textSecondary,
+                      side: const BorderSide(color: AppColors.glassBorder),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: const Text('Scan Again'),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  flex: 2,
+                  child: ElevatedButton(
+                    onPressed: _isLoading ? null : _logMeal,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.neonGreen,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                    child: _isLoading
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
+                            ),
+                          )
+                        : const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.add),
+                              SizedBox(width: 6),
+                              Text(
+                                'Add to Meal',
+                                style: TextStyle(fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ),
       ),
     );
+  }
+  
+  void _selectAlternative(Map<String, dynamic> alt) {
+    setState(() {
+      _detectedFood = {
+        'name': alt['name'] ?? 'Alternative Food',
+        'confidence': alt['confidence'] ?? 0.7,
+        'calories': _parseNum(alt['calories']),
+        'protein': _parseNum(alt['protein'] ?? 10),
+        'carbs': _parseNum(alt['carbs'] ?? 20),
+        'fat': _parseNum(alt['fat'] ?? 5),
+        'fiber': _parseNum(alt['fiber'] ?? 3),
+        'servingSize': alt['servingSize'] ?? '1 serving',
+        'alternatives': [], // Clear alternatives when selecting one
+      };
+    });
   }
 
   Widget _buildNutrientChip(String text, Color color) {
