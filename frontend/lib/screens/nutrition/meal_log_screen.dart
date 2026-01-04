@@ -3,46 +3,167 @@
 /// Owner: Dilshan
 /// Manual meal logging with food search
 
+import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
 import '../../widgets/common/glassmorphic_card.dart';
+import '../../core/services/api_service.dart';
+import '../../providers/nutrition_provider.dart';
 
-class MealLogScreen extends StatefulWidget {
+class MealLogScreen extends ConsumerStatefulWidget {
   const MealLogScreen({super.key});
 
   @override
-  State<MealLogScreen> createState() => _MealLogScreenState();
+  ConsumerState<MealLogScreen> createState() => _MealLogScreenState();
 }
 
-class _MealLogScreenState extends State<MealLogScreen> {
+class _MealLogScreenState extends ConsumerState<MealLogScreen> {
   final TextEditingController _searchController = TextEditingController();
   String _selectedMealType = 'Lunch';
   final List<Map<String, dynamic>> _selectedFoods = [];
   
   final List<String> _mealTypes = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
   
-  final List<Map<String, dynamic>> _recentFoods = [
-    {'name': 'Oatmeal', 'calories': 150, 'serving': '1 cup'},
-    {'name': 'Banana', 'calories': 105, 'serving': '1 medium'},
-    {'name': 'Grilled Chicken', 'calories': 165, 'serving': '100g'},
-    {'name': 'Brown Rice', 'calories': 215, 'serving': '1 cup'},
-    {'name': 'Greek Yogurt', 'calories': 100, 'serving': '170g'},
-  ];
-  
-  final List<Map<String, dynamic>> _searchResults = [
-    {'name': 'Apple', 'calories': 95, 'serving': '1 medium', 'protein': 0.5, 'carbs': 25, 'fat': 0.3},
-    {'name': 'Almonds', 'calories': 164, 'serving': '1 oz (28g)', 'protein': 6, 'carbs': 6, 'fat': 14},
-    {'name': 'Avocado', 'calories': 240, 'serving': '1 whole', 'protein': 3, 'carbs': 12, 'fat': 22},
-    {'name': 'Salmon', 'calories': 208, 'serving': '100g', 'protein': 20, 'carbs': 0, 'fat': 13},
-    {'name': 'Spinach Salad', 'calories': 23, 'serving': '1 cup', 'protein': 3, 'carbs': 4, 'fat': 0.4},
-  ];
+  List<Map<String, dynamic>> _recentFoods = [];
+  List<Map<String, dynamic>> _searchResults = [];
+  bool _isSearching = false;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  Timer? _debounce;
 
-  int get _totalCalories => _selectedFoods.fold(0, (sum, food) => sum + (food['calories'] as int));
+  num _parseNum(dynamic value) {
+    if (value == null) return 0;
+    if (value is num) return value;
+    if (value is String) return num.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  int get _totalCalories => _selectedFoods.fold(0, (sum, food) => sum + _parseNum(food['calories']).toInt());
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadRecentFoods();
+    });
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _debounce?.cancel();
     super.dispose();
+  }
+
+  Future<void> _loadRecentFoods() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.get('/api/nutrition/recent-foods');
+      if (response.success && response.data != null && response.data['foods'] != null) {
+        setState(() {
+          _recentFoods = List<Map<String, dynamic>>.from(response.data['foods']);
+        });
+      }
+    } catch (e) {
+      // Fall back to empty list on error
+      debugPrint('Error loading recent foods: $e');
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _searchFoods(String query) async {
+    if (query.isEmpty) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+      return;
+    }
+
+    setState(() => _isSearching = true);
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.get('/api/nutrition/search', queryParams: {'query': query});
+      if (response.success && response.data != null && response.data['results'] != null) {
+        setState(() {
+          _searchResults = List<Map<String, dynamic>>.from(
+            (response.data['results'] as List).map((item) => {
+              'name': item['description'] ?? item['name'] ?? 'Unknown',
+              'calories': _parseNum(item['calories'] ?? item['foodNutrients']?[0]?['value'] ?? 0),
+              'serving': item['servingSize'] ?? item['serving'] ?? '100g',
+              'protein': _parseNum(item['protein'] ?? 0),
+              'carbs': _parseNum(item['carbs'] ?? 0),
+              'fat': _parseNum(item['fat'] ?? 0),
+              'fdc_id': item['fdcId'] ?? item['fdc_id'],
+            }),
+          );
+        });
+      }
+    } catch (e) {
+      debugPrint('Error searching foods: $e');
+    } finally {
+      setState(() => _isSearching = false);
+    }
+  }
+
+  Future<void> _saveMeal() async {
+    if (_selectedFoods.isEmpty) return;
+
+    setState(() => _isSaving = true);
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.post('/api/nutrition/log-meal', body: {
+        'user_id': 'current_user',
+        'meal_type': _selectedMealType.toLowerCase(),
+        'foods': _selectedFoods.map((food) => {
+          'name': food['name'],
+          'calories': _parseNum(food['calories']),
+          'protein': _parseNum(food['protein'] ?? 0),
+          'carbs': _parseNum(food['carbs'] ?? 0),
+          'fat': _parseNum(food['fat'] ?? 0),
+          'serving_size': food['serving'] ?? '1 serving',
+        }).toList(),
+      });
+
+      if (response.success) {
+        // Refresh nutrition data
+        ref.read(nutritionProvider.notifier).loadDailySummary('current_user');
+        
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('${_selectedMealType} logged successfully!'),
+              backgroundColor: Colors.green,
+            ),
+          );
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to save meal: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSaving = false);
+      }
+    }
+  }
+
+  void _onSearchChanged(String query) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 500), () {
+      _searchFoods(query);
+    });
   }
 
   @override
@@ -162,7 +283,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
                       border: InputBorder.none,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                     ),
-                    onChanged: (_) => setState(() {}),
+                    onChanged: _onSearchChanged,
                   ),
                 ),
               ),
@@ -209,21 +330,57 @@ class _MealLogScreenState extends State<MealLogScreen> {
                     ],
                     
                     // Search Results or Recent Foods
-                    Text(
-                      _searchController.text.isNotEmpty ? 'Search Results' : 'Recent Foods',
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: AppColors.textPrimary,
+                    if (_isSearching)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: CircularProgressIndicator(),
+                        ),
+                      )
+                    else if (_isLoading && _searchController.text.isEmpty)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(20),
+                          child: CircularProgressIndicator(),
+                        ),
+                      )
+                    else ...[
+                      Text(
+                        _searchController.text.isNotEmpty ? 'Search Results' : 'Recent Foods',
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
                       ),
-                    ),
-                    const SizedBox(height: 10),
-                    
-                    ...((_searchController.text.isNotEmpty ? _searchResults : _recentFoods)
-                        .map((food) => Padding(
-                              padding: const EdgeInsets.only(bottom: 8),
-                              child: _buildFoodItem(food),
-                            ))),
+                      const SizedBox(height: 10),
+                      
+                      if ((_searchController.text.isNotEmpty ? _searchResults : _recentFoods).isEmpty)
+                        Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(40),
+                            child: Column(
+                              children: [
+                                Icon(Icons.search_off, size: 48, color: Colors.grey[400]),
+                                const SizedBox(height: 16),
+                                Text(
+                                  _searchController.text.isNotEmpty 
+                                      ? 'No foods found for "${_searchController.text}"'
+                                      : 'No recent foods',
+                                  style: TextStyle(color: Colors.grey[600]),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      else
+                        ...((_searchController.text.isNotEmpty ? _searchResults : _recentFoods)
+                            .map((food) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: _buildFoodItem(food),
+                                ))),
+                    ],
                   ],
                 ),
               ),
@@ -235,10 +392,7 @@ class _MealLogScreenState extends State<MealLogScreen> {
                   child: SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
-                      onPressed: () {
-                        // TODO: Save meal to backend
-                        Navigator.pop(context);
-                      },
+                      onPressed: _isSaving ? null : _saveMeal,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.neonGreen,
                         foregroundColor: Colors.black,
@@ -247,13 +401,22 @@ class _MealLogScreenState extends State<MealLogScreen> {
                           borderRadius: BorderRadius.circular(14),
                         ),
                       ),
-                      child: Text(
-                        'Save $_selectedMealType • $_totalCalories cal',
-                        style: const TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      child: _isSaving
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.black,
+                              ),
+                            )
+                          : Text(
+                              'Save $_selectedMealType • $_totalCalories cal',
+                              style: const TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                     ),
                   ),
                 ),

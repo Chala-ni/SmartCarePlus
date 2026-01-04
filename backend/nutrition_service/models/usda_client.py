@@ -63,6 +63,9 @@ class FoodItem:
     potassium: float = 0.0
     magnesium: float = 0.0
     
+    # Cost and budget - 1=low, 2=medium, 3=high
+    cost_level: int = 2
+    
     # All nutrients
     nutrients: List[NutrientInfo] = field(default_factory=list)
     
@@ -522,6 +525,7 @@ class LocalFoodDatabase:
                     fiber=item.get("fiber_g", item.get("fiber", 0)),
                     sugar=item.get("sugar", 0),
                     sodium=item.get("sodium_mg", item.get("sodium", 0)),
+                    cost_level=item.get("cost_level", 2),  # 1=low, 2=medium, 3=high
                 )
                 
                 # Store additional metadata
@@ -607,8 +611,64 @@ class LocalFoodDatabase:
         return self.foods.get(name.lower())
     
     def get_by_category(self, category: str) -> List[FoodItem]:
-        """Get all foods in a category."""
-        return [f for f in self.foods.values() if f.category and f.category.lower() == category.lower()]
+        """
+        Get foods by category - maps abstract categories to food properties.
+        
+        Categories like 'protein', 'vegetables', 'grains', etc. are mapped
+        to food properties like is_vegetarian, protein content, meal_type, etc.
+        """
+        category_lower = category.lower()
+        results = []
+        
+        # Category to property mapping
+        category_keywords = {
+            'protein': ['fish', 'egg', 'chicken', 'beef', 'pork', 'dhal', 'lentil', 'bean', 'tofu'],
+            'vegetables': ['vegetable', 'salad', 'sambol', 'curry', 'gotukola', 'mukunuwenna', 'kankun'],
+            'grains': ['rice', 'bread', 'roti', 'string hoppers', 'hoppers', 'pittu', 'kiribath'],
+            'fruits': ['fruit', 'banana', 'papaya', 'mango', 'pineapple', 'woodapple'],
+            'dairy': ['milk', 'curd', 'yogurt', 'cheese'],
+            'nuts': ['nuts', 'cashew', 'peanut', 'coconut sambol'],
+            'breakfast': [],  # Will check meal_type
+            'lunch': [],
+            'dinner': [],
+            'snack': [],
+        }
+        
+        keywords = category_keywords.get(category_lower, [])
+        
+        for food in self.foods.values():
+            food_name_lower = food.name.lower()
+            food_desc = getattr(food, 'description', '').lower()
+            meal_types = getattr(food, 'meal_types', [])
+            
+            # Check meal_type for meal categories
+            if category_lower in ['breakfast', 'lunch', 'dinner']:
+                if meal_types and category_lower in [m.lower() for m in meal_types]:
+                    results.append(food)
+                    continue
+            
+            if category_lower == 'snack':
+                # Snacks are typically lower calorie or marked as snack
+                if food.calories < 200 or 'snack' in food_name_lower:
+                    results.append(food)
+                    continue
+            
+            # Check keywords
+            for keyword in keywords:
+                if keyword in food_name_lower or keyword in food_desc:
+                    results.append(food)
+                    break
+            
+            # Special checks
+            if category_lower == 'protein' and food.protein >= 10:
+                if food not in results:
+                    results.append(food)
+            elif category_lower == 'vegetables':
+                if getattr(food, 'is_vegetarian', False) and food.protein < 10:
+                    if food not in results:
+                        results.append(food)
+        
+        return results
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

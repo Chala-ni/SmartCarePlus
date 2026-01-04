@@ -42,10 +42,12 @@ class _ElderlyProfileScreenState extends ConsumerState<ElderlyProfileScreen> {
   String _selectedGender = 'Male';
   String _selectedBloodType = 'O+';
   String _selectedMobilityLevel = 'Independent';
+  String _selectedBudgetLevel = 'Medium';
   
   final List<String> _genders = ['Male', 'Female', 'Other'];
   final List<String> _bloodTypes = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
   final List<String> _mobilityLevels = ['Independent', 'Uses Cane', 'Uses Walker', 'Wheelchair', 'Needs Assistance'];
+  final List<String> _budgetLevels = ['Low', 'Medium', 'High'];
 
   @override
   void initState() {
@@ -69,6 +71,7 @@ class _ElderlyProfileScreenState extends ConsumerState<ElderlyProfileScreen> {
     _selectedGender = elderlyData['gender'] ?? 'Male';
     _selectedBloodType = elderlyData['blood_type'] ?? 'O+';
     _selectedMobilityLevel = elderlyData['mobility_level'] ?? 'Independent';
+    _selectedBudgetLevel = elderlyData['budget_level'] ?? 'Medium';
   }
 
   @override
@@ -101,6 +104,7 @@ class _ElderlyProfileScreenState extends ConsumerState<ElderlyProfileScreen> {
         'weight': double.tryParse(_weightController.text) ?? 0,
         'blood_type': _selectedBloodType,
         'mobility_level': _selectedMobilityLevel,
+        'budget_level': _selectedBudgetLevel.toLowerCase(),
         'emergency_contact_name': _emergencyContactController.text,
         'emergency_contact_phone': _emergencyPhoneController.text,
         'medical_conditions': _medicalConditionsController.text,
@@ -201,6 +205,11 @@ class _ElderlyProfileScreenState extends ConsumerState<ElderlyProfileScreen> {
                         _buildTextField(_allergiesController, 'Allergies', Icons.warning_amber, maxLines: 2, hint: 'e.g., Penicillin, Peanuts'),
                         _buildTextField(_medicationsController, 'Current Medications', Icons.medication, maxLines: 3, hint: 'e.g., Metformin 500mg, Aspirin 81mg'),
                         _buildTextField(_dietaryRestrictionsController, 'Dietary Restrictions', Icons.restaurant, maxLines: 2, hint: 'e.g., Low sodium, Diabetic diet'),
+                        
+                        const SizedBox(height: 24),
+                        _buildSectionTitle('Nutrition Preferences', Icons.fastfood),
+                        const SizedBox(height: 12),
+                        _buildDropdown('Meal Budget Level', _selectedBudgetLevel, _budgetLevels, (v) => setState(() => _selectedBudgetLevel = v!)),
                         
                         const SizedBox(height: 32),
                         _buildSaveButton(),

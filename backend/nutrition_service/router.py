@@ -7,7 +7,7 @@ Uses USDA FoodData Central API and local food database.
 """
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from typing import Optional, List
+from typing import Optional, List, Dict
 from pydantic import BaseModel
 from datetime import datetime, date
 import random
@@ -195,6 +195,8 @@ class GeneratePlanRequest(BaseModel):
     duration_days: int = 7
     restrictions: Optional[List[str]] = None  # List of DietaryRestriction values
     calorie_target: Optional[int] = None
+    budget_level: Optional[str] = "medium"  # low, medium, high
+    food_dislikes: Optional[List[str]] = None
 
 
 class HydrationLogRequest(BaseModel):
@@ -434,6 +436,64 @@ async def search_food(query: str, limit: int = 10, use_usda: bool = False):
     }
 
 
+@router.get("/recent-foods")
+async def get_recent_foods(user_id: str = "current_user", limit: int = 10):
+    """
+    Get recently logged foods for a user.
+    
+    Returns common foods if no recent foods are available.
+    """
+    _, local_db, _, meal_logger, _ = get_services()
+    
+    # Try to get from meal logger's daily log
+    try:
+        daily_log = meal_logger.get_daily_log(user_id)
+        recent_foods = []
+        
+        # Extract foods from recent meals
+        for meal in daily_log.get("meals", []):
+            for food in meal.get("foods", []):
+                recent_foods.append({
+                    "name": food.get("name", "Unknown"),
+                    "calories": food.get("calories", 0),
+                    "serving": food.get("serving_size", "1 serving"),
+                    "protein": food.get("protein", 0),
+                    "carbs": food.get("carbs", 0),
+                    "fat": food.get("fat", 0),
+                })
+        
+        if recent_foods:
+            # Return unique foods (deduplicated by name)
+            seen = set()
+            unique_foods = []
+            for food in recent_foods:
+                if food["name"] not in seen:
+                    seen.add(food["name"])
+                    unique_foods.append(food)
+            return {"foods": unique_foods[:limit]}
+    except Exception:
+        pass
+    
+    # Fall back to popular/common foods from local database
+    common_searches = ["rice", "chicken", "bread", "milk", "egg", "apple", "banana", "fish"]
+    popular_foods = []
+    
+    for search_term in common_searches:
+        results = local_db.search(search_term)
+        if results:
+            food = results[0]
+            popular_foods.append({
+                "name": food.description,
+                "calories": food.calories,
+                "serving": f"{food.serving_size} {food.serving_unit}",
+                "protein": food.protein,
+                "carbs": food.carbs,
+                "fat": food.fat,
+            })
+    
+    return {"foods": popular_foods[:limit]}
+
+
 @router.post("/log-meal")
 async def log_meal(request: MealLogRequest):
     """
@@ -454,7 +514,9 @@ async def log_meal(request: MealLogRequest):
     total_protein = 0
     total_carbs = 0
     total_fat = 0
+    total_fiber = 0
     logged_foods = []
+    food_items_for_log = []
     
     for food_entry in request.foods:
         food_name = food_entry.get("name", "")
@@ -468,31 +530,72 @@ async def log_meal(request: MealLogRequest):
             total_protein += food.protein * portion
             total_carbs += food.carbohydrates * portion
             total_fat += food.fat * portion
+            total_fiber += food.fiber * portion
             logged_foods.append({
                 "name": food.name,
                 "portion": portion,
                 "calories": round(food.calories * portion, 1)
             })
+            food_items_for_log.append((food, portion))
         else:
             # Use provided values if food not found
-            total_calories += food_entry.get("calories", 0) * portion
+            calories = food_entry.get("calories", 0)
+            protein = food_entry.get("protein", 0)
+            carbs = food_entry.get("carbs", 0)
+            fat = food_entry.get("fat", 0)
+            
+            total_calories += calories * portion
+            total_protein += protein * portion
+            total_carbs += carbs * portion
+            total_fat += fat * portion
+            
             logged_foods.append({
                 "name": food_name,
                 "portion": portion,
-                "calories": food_entry.get("calories", 0) * portion
+                "calories": calories * portion
             })
+            
+            # Create a temporary FoodItem for logging
+            from .models import FoodItem
+            temp_food = FoodItem(
+                fdc_id=0,
+                name=food_name,
+                category="Logged",
+                serving_size=100,
+                serving_unit="g",
+                calories=calories,
+                protein=protein,
+                carbohydrates=carbs,
+                fat=fat,
+                fiber=0,
+                sugar=0,
+                sodium=0,
+            )
+            food_items_for_log.append((temp_food, portion))
     
-    # Log the meal - return success without using MealLogger for now
-    # (MealLogger expects MealItem objects, we have simplified dict)
-    import uuid
-    log_id = str(uuid.uuid4())[:8]
+    # Create MealItem objects and log the meal
+    from .models.meal_planner import MealItem
+    meal_items = []
+    for food, portion in food_items_for_log:
+        meal_items.append(MealItem(
+            food=food,
+            serving_size=100 * portion,
+            serving_unit="g",
+        ))
     
-    # TODO: Convert logged_foods to MealItem objects for proper logging
-    # For now, just return success with the calculated totals
+    # Log the meal
+    log = meal_logger.log_meal(
+        user_id=request.user_id,
+        meal_type=meal_type,
+        items=meal_items,
+        notes=request.notes
+    )
+    
+    logger.info(f"✅ Meal logged: {len(logged_foods)} foods, {total_calories:.0f} cal for user {request.user_id}")
     
     return {
         "status": "logged",
-        "log_id": log_id,
+        "log_id": log.log_id,
         "user_id": request.user_id,
         "meal_type": request.meal_type,
         "foods_logged": len(logged_foods),
@@ -535,6 +638,16 @@ async def get_daily_summary(user_id: str, date: Optional[str] = None):
     return {
         "user_id": user_id,
         "date": target_date,
+        "total_calories": consumed.get("calories", 0),
+        "target_calories": rda.calories,
+        "protein": consumed.get("protein", 0),
+        "protein_target": rda.protein,
+        "carbs": consumed.get("carbohydrates", 0),
+        "carbs_target": rda.carbohydrates,
+        "fat": consumed.get("fat", 0),
+        "fat_target": rda.fat,
+        "fiber": consumed.get("fiber", 0),
+        "fiber_target": rda.fiber,
         "calories": {
             "consumed": consumed.get("calories", 0),
             "goal": rda.calories,
@@ -560,7 +673,16 @@ async def get_daily_summary(user_id: str, date: Optional[str] = None):
             "goal": rda.fiber,
             "percent": round((consumed.get("fiber", 0) / rda.fiber) * 100, 1)
         },
-        "meals": daily_log.get("meals", []),
+        "meals": [
+            {
+                "meal_type": m.get("type", "").lower(),
+                "name": m.get("name", ""),
+                "calories": m.get("calories", 0),
+                "time": m.get("time", ""),
+                "foods": [{"name": name} for name in m.get("name", "").split(", ") if name]
+            }
+            for m in daily_log.get("meals", [])
+        ],
         "recommendations": _get_nutrition_recommendations(consumed, rda)
     }
 
@@ -595,26 +717,43 @@ async def get_meal_plan(user_id: str, date: Optional[str] = None):
     
     target_date = date or datetime.now().strftime("%Y-%m-%d")
     
-    # Get or generate meal plan
-    plan = meal_planner.get_daily_plan(user_id, target_date)
+    # Generate meal plan for requested days
+    plans = meal_planner.generate_plan(
+        user_id=user_id,
+        duration_days=7,
+        restrictions=None,
+        preferences=None
+    )
     
-    if plan:
+    if plans:
+        # Convert plans to response format
+        meal_plan = {}
+        for i, daily_plan in enumerate(plans):
+            meal_plan[f"day_{i}"] = [
+                {
+                    "meal_type": meal.meal_type.value if hasattr(meal.meal_type, 'value') else str(meal.meal_type),
+                    "name": meal.meal_type.value.capitalize() if hasattr(meal.meal_type, 'value') else str(meal.meal_type).capitalize(),
+                    "time": meal.time,
+                    "calories": meal.total_calories,
+                    "foods": [item.to_dict() for item in meal.items] if hasattr(meal, 'items') else [],
+                    "description": ", ".join([item.food.description for item in meal.items]) if hasattr(meal, 'items') else "",
+                    "serving_size": "1 serving"
+                }
+                for meal in daily_plan.meals
+            ]
+        
         return {
             "user_id": user_id,
             "date": target_date,
-            "meals": plan.to_dict(),
-            "total_calories": plan.total_calories,
-            "macros": plan.macros
+            "meal_plan": meal_plan,
+            "total_calories": sum(p.total_calories for p in plans) / len(plans) if plans else 0,
         }
     else:
-        # Generate a new plan
-        plan = meal_planner.generate_daily_plan(user_id)
         return {
             "user_id": user_id,
             "date": target_date,
-            "meals": plan.to_dict() if plan else [],
-            "total_calories": plan.total_calories if plan else 0,
-            "macros": plan.macros if plan else {}
+            "meal_plan": {},
+            "total_calories": 0,
         }
 
 
@@ -624,6 +763,7 @@ async def generate_plan(request: GeneratePlanRequest):
     Generate personalized meal plan based on RDA and dietary restrictions.
     
     Supports restrictions like diabetic, low-sodium, vegetarian, etc.
+    Budget levels: low, medium, high (affects food selection by cost)
     """
     _, _, meal_planner, _, _ = get_services()
     
@@ -644,26 +784,49 @@ async def generate_plan(request: GeneratePlanRequest):
     if restrictions:
         rda = rda.adjust_for_restrictions(restrictions)
     
+    # Build preferences dict with budget and dislikes
+    preferences = {
+        "calorie_goal": request.calorie_target,
+        "budget_level": request.budget_level or "medium",
+        "dislikes": request.food_dislikes or [],
+    }
+    
     # Generate meal plan
-    plan = meal_planner.generate_weekly_plan(
+    plans = meal_planner.generate_plan(
         user_id=request.user_id,
-        days=request.duration_days,
-        rda=rda,
-        restrictions=restrictions
+        duration_days=request.duration_days,
+        restrictions=restrictions,
+        preferences=preferences,
+        base_rda=rda
     )
+    
+    # Convert plans to response format
+    meal_plan = {}
+    for i, daily_plan in enumerate(plans):
+        meal_plan[f"day_{i}"] = [
+            {
+                "meal_type": meal.meal_type.value if hasattr(meal.meal_type, 'value') else str(meal.meal_type),
+                "name": meal.meal_type.value.capitalize() if hasattr(meal.meal_type, 'value') else str(meal.meal_type).capitalize(),
+                "time": meal.time,
+                "calories": meal.total_calories,
+                "foods": [item.to_dict() for item in meal.items] if hasattr(meal, 'items') else [],
+            }
+            for meal in daily_plan.meals
+        ]
     
     return {
         "status": "generated",
         "user_id": request.user_id,
         "duration_days": request.duration_days,
         "restrictions_applied": [r.value for r in restrictions],
+        "budget_level": request.budget_level or "medium",
         "daily_targets": {
             "calories": rda.calories,
             "protein": rda.protein,
             "carbohydrates": rda.carbohydrates,
             "fat": rda.fat
         },
-        "plan": plan,
+        "meal_plan": meal_plan,
         "generated_at": datetime.now().isoformat()
     }
 
@@ -794,4 +957,63 @@ async def get_rda_profile(user_id: str):
         },
         "age_group": "65+",
         "note": "Values based on dietary guidelines for adults 65 and older"
+    }
+
+
+# In-memory storage for nutrition preferences (would use database in production)
+_nutrition_preferences: Dict[str, dict] = {}
+
+
+class NutritionPreferencesRequest(BaseModel):
+    user_id: str
+    dietary_restrictions: Optional[List[str]] = []
+    food_allergies: Optional[List[str]] = []
+    food_dislikes: Optional[List[str]] = []
+    budget_level: Optional[str] = "medium"  # low, medium, high
+    calorie_target: Optional[int] = None
+    preferred_cuisines: Optional[List[str]] = []
+
+
+@router.get("/nutrition-preferences/{user_id}")
+async def get_nutrition_preferences(user_id: str):
+    """
+    Get user's nutrition preferences for meal planning.
+    
+    Returns dietary restrictions, budget level, dislikes, etc.
+    """
+    prefs = _nutrition_preferences.get(user_id, {
+        "dietary_restrictions": [],
+        "food_allergies": [],
+        "food_dislikes": [],
+        "budget_level": "medium",
+        "calorie_target": None,
+        "preferred_cuisines": []
+    })
+    
+    return {
+        "user_id": user_id,
+        "preferences": prefs
+    }
+
+
+@router.post("/nutrition-preferences")
+async def update_nutrition_preferences(request: NutritionPreferencesRequest):
+    """
+    Update user's nutrition preferences for meal planning.
+    
+    Saves dietary restrictions, budget level, food dislikes, etc.
+    """
+    _nutrition_preferences[request.user_id] = {
+        "dietary_restrictions": request.dietary_restrictions or [],
+        "food_allergies": request.food_allergies or [],
+        "food_dislikes": request.food_dislikes or [],
+        "budget_level": request.budget_level or "medium",
+        "calorie_target": request.calorie_target,
+        "preferred_cuisines": request.preferred_cuisines or []
+    }
+    
+    return {
+        "status": "saved",
+        "user_id": request.user_id,
+        "preferences": _nutrition_preferences[request.user_id]
     }

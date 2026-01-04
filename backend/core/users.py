@@ -34,6 +34,17 @@ class EmergencyContact(BaseModel):
     is_primary: bool = False
 
 
+class NutritionPreferences(BaseModel):
+    """Nutrition and dietary preferences for meal planning."""
+    dietary_restrictions: List[str] = []  # diabetic, low_sodium, vegetarian, etc.
+    food_allergies: List[str] = []
+    food_dislikes: List[str] = []
+    budget_level: str = "medium"  # low, medium, high
+    daily_budget: Optional[float] = None  # Daily budget in currency
+    calorie_target: Optional[int] = None  # Override default RDA
+    preferred_cuisines: List[str] = []
+
+
 class UserBase(BaseModel):
     email: EmailStr
     name: str
@@ -49,6 +60,7 @@ class ElderlyProfile(BaseModel):
     emergency_contacts: List[EmergencyContact] = []
     address: Optional[str] = None
     notes: Optional[str] = None
+    nutrition_preferences: Optional[NutritionPreferences] = None
 
 
 class CaregiverProfile(BaseModel):

@@ -415,6 +415,11 @@ class MealPlanGenerator:
         if "dislikes" in preferences:
             avoid_foods.update(set(preferences["dislikes"]))
         
+        # Get budget level - convert string to int: low=1, medium=2, high=3
+        budget_str = preferences.get("budget_level", "medium")
+        budget_map = {"low": 1, "medium": 2, "high": 3}
+        max_cost_level = budget_map.get(budget_str.lower() if isinstance(budget_str, str) else "medium", 2)
+        
         current_calories = 0.0
         max_items = 3 if "snack" in meal_type.value else 4
         
@@ -425,9 +430,9 @@ class MealPlanGenerator:
             if current_calories >= target_calories * 0.9:
                 break
             
-            # Find suitable food
+            # Find suitable food with budget filter
             food = self._find_food_for_meal(
-                category, avoid_foods, target_calories - current_calories
+                category, avoid_foods, target_calories - current_calories, max_cost_level
             )
             
             if food:
@@ -456,9 +461,21 @@ class MealPlanGenerator:
         self,
         category: str,
         avoid: Set[str],
-        remaining_calories: float
+        remaining_calories: float,
+        max_cost_level: int = 3
     ) -> Optional[FoodItem]:
-        """Find a suitable food item for the meal."""
+        """
+        Find a suitable food item for the meal.
+        
+        Args:
+            category: Food category to search in
+            avoid: Set of words to avoid in food names
+            remaining_calories: Remaining calories for the meal
+            max_cost_level: Maximum cost level (1=low, 2=medium, 3=high)
+        
+        Returns:
+            Suitable FoodItem or None
+        """
         # Get foods from category
         category_foods = self.food_db.get_by_category(category)
         
@@ -474,6 +491,11 @@ class MealPlanGenerator:
             # Check if food should be avoided
             should_avoid = any(avoid_word in food_name_lower for avoid_word in avoid)
             if should_avoid:
+                continue
+            
+            # Filter by cost level if applicable
+            food_cost = getattr(food, 'cost_level', 2)
+            if food_cost > max_cost_level:
                 continue
             
             # Prefer foods not recently used
@@ -729,6 +751,137 @@ class MealLogger:
                 1 for s in daily_summaries 
                 if s["completion"]["calories"] >= 90
             ),
+        }
+    
+    def get_daily_log(self, user_id: str, target_date: str) -> Dict[str, Any]:
+        """
+        Get all meals logged for a specific day.
+        
+        Args:
+            user_id: User ID
+            target_date: Date string (YYYY-MM-DD)
+        
+        Returns:
+            Dict with totals and meals list
+        """
+        from datetime import datetime
+        
+        try:
+            date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            date_obj = date.today()
+        
+        user_logs = self.logs.get(user_id, [])
+        
+        # Filter to target date
+        day_logs = [
+            log for log in user_logs
+            if log.timestamp.date() == date_obj
+        ]
+        
+        # Calculate totals
+        totals = {
+            "calories": 0.0,
+            "protein": 0.0,
+            "carbohydrates": 0.0,
+            "fat": 0.0,
+            "fiber": 0.0,
+        }
+        
+        meals = []
+        
+        for log in day_logs:
+            meal_data = {
+                "type": log.meal_type.value.capitalize(),
+                "name": "",
+                "calories": 0,
+                "time": log.timestamp.strftime("%I:%M %p"),
+            }
+            
+            item_names = []
+            for item in log.items:
+                nutrients = item.scaled_nutrients
+                totals["calories"] += nutrients["calories"]
+                totals["protein"] += nutrients["protein"]
+                totals["carbohydrates"] += nutrients["carbohydrates"]
+                totals["fat"] += nutrients["fat"]
+                totals["fiber"] += nutrients.get("fiber", 0)
+                meal_data["calories"] += int(nutrients["calories"])
+                item_names.append(item.food.name)
+            
+            meal_data["name"] = ", ".join(item_names) if item_names else "Logged meal"
+            meals.append(meal_data)
+        
+        return {
+            "totals": {k: round(v, 1) for k, v in totals.items()},
+            "meals": meals,
+        }
+    
+    def log_hydration(
+        self,
+        user_id: str,
+        amount_ml: int,
+        beverage_type: str = "water"
+    ) -> None:
+        """
+        Log hydration/fluid intake.
+        
+        Args:
+            user_id: User ID
+            amount_ml: Amount in milliliters
+            beverage_type: Type of beverage
+        """
+        if not hasattr(self, 'hydration_logs'):
+            self.hydration_logs: Dict[str, List[Dict]] = {}
+        
+        if user_id not in self.hydration_logs:
+            self.hydration_logs[user_id] = []
+        
+        self.hydration_logs[user_id].append({
+            "timestamp": datetime.now(),
+            "amount_ml": amount_ml,
+            "beverage_type": beverage_type,
+        })
+    
+    def get_hydration_log(self, user_id: str, target_date: str) -> Dict[str, Any]:
+        """
+        Get hydration log for a specific day.
+        
+        Args:
+            user_id: User ID
+            target_date: Date string (YYYY-MM-DD)
+        
+        Returns:
+            Dict with total_ml and log entries
+        """
+        if not hasattr(self, 'hydration_logs'):
+            self.hydration_logs = {}
+        
+        try:
+            date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+        except ValueError:
+            date_obj = date.today()
+        
+        user_logs = self.hydration_logs.get(user_id, [])
+        
+        # Filter to target date
+        day_logs = [
+            log for log in user_logs
+            if log["timestamp"].date() == date_obj
+        ]
+        
+        total_ml = sum(log["amount_ml"] for log in day_logs)
+        
+        return {
+            "total_ml": total_ml,
+            "log": [
+                {
+                    "time": log["timestamp"].strftime("%I:%M %p"),
+                    "amount_ml": log["amount_ml"],
+                    "beverage_type": log["beverage_type"],
+                }
+                for log in day_logs
+            ],
         }
 
 

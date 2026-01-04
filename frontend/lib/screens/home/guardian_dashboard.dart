@@ -1740,6 +1740,7 @@ class _ElderlyListTabState extends ConsumerState<_ElderlyListTab> {
     final name = elderly.name;
     final connectionType = elderly.connectionType;
     final connectedAt = elderly.connectedAt;
+    final elderlyId = elderly.id;
     final color = connectionType == 'guardian' ? AppColors.neonGreen : AppColors.neonOrange;
     
     // Parse connection date
@@ -1840,6 +1841,11 @@ class _ElderlyListTabState extends ConsumerState<_ElderlyListTab> {
             ],
           ),
           const SizedBox(height: 16),
+          
+          // Nutrition Summary Row
+          _ElderlyNutritionSummary(elderlyId: elderly.id),
+          
+          const SizedBox(height: 12),
           const Divider(color: AppColors.glassBorder),
           const SizedBox(height: 12),
           Row(
@@ -1882,6 +1888,164 @@ class _ElderlyListTabState extends ConsumerState<_ElderlyListTab> {
           ),
         ],
       ),
+    );
+  }
+}
+
+// ============= Elderly Nutrition Summary Widget =============
+
+class _ElderlyNutritionSummary extends ConsumerStatefulWidget {
+  final String elderlyId;
+  
+  const _ElderlyNutritionSummary({required this.elderlyId});
+
+  @override
+  ConsumerState<_ElderlyNutritionSummary> createState() => _ElderlyNutritionSummaryState();
+}
+
+class _ElderlyNutritionSummaryState extends ConsumerState<_ElderlyNutritionSummary> {
+  bool _isLoading = true;
+  int _calories = 0;
+  int _caloriesTarget = 1800;
+  int _hydrationGlasses = 0;
+  int _mealsLogged = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNutritionData();
+  }
+
+  Future<void> _loadNutritionData() async {
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.get('/api/nutrition/daily-summary/${widget.elderlyId}');
+      if (response.success && response.data != null && mounted) {
+        setState(() {
+          _calories = (response.data['total_calories'] as num?)?.toInt() ?? 0;
+          _caloriesTarget = (response.data['target_calories'] as num?)?.toInt() ?? 1800;
+          _mealsLogged = (response.data['meals'] as List?)?.length ?? 0;
+        });
+      }
+      
+      // Also load hydration
+      final hydrationResponse = await api.get('/api/nutrition/hydration/${widget.elderlyId}');
+      if (hydrationResponse.success && hydrationResponse.data != null && mounted) {
+        setState(() {
+          _hydrationGlasses = (hydrationResponse.data['glasses'] as num?)?.toInt() ?? 0;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading elderly nutrition: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const SizedBox(
+        height: 40,
+        child: Center(
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    final caloriePercent = _caloriesTarget > 0 ? (_calories / _caloriesTarget * 100).clamp(0, 100).toInt() : 0;
+    
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          _buildStatItem(
+            icon: Icons.local_fire_department,
+            label: 'Calories',
+            value: '$_calories',
+            subValue: '$caloriePercent%',
+            color: AppColors.neonOrange,
+          ),
+          Container(
+            width: 1,
+            height: 35,
+            color: AppColors.glassBorder,
+          ),
+          _buildStatItem(
+            icon: Icons.water_drop,
+            label: 'Hydration',
+            value: '$_hydrationGlasses',
+            subValue: '/8 glasses',
+            color: AppColors.neonPurple,
+          ),
+          Container(
+            width: 1,
+            height: 35,
+            color: AppColors.glassBorder,
+          ),
+          _buildStatItem(
+            icon: Icons.restaurant,
+            label: 'Meals',
+            value: '$_mealsLogged',
+            subValue: 'today',
+            color: AppColors.neonGreen,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem({
+    required IconData icon,
+    required String label,
+    required String value,
+    required String subValue,
+    required Color color,
+  }) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 18),
+        const SizedBox(height: 4),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: color,
+              ),
+            ),
+            const SizedBox(width: 2),
+            Text(
+              subValue,
+              style: const TextStyle(
+                fontSize: 10,
+                color: AppColors.textSecondary,
+              ),
+            ),
+          ],
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 10,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ],
     );
   }
 }

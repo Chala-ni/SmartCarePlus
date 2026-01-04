@@ -1047,66 +1047,178 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
         glowColor: isSelected ? AppColors.neonGreen : AppColors.neonCyan,
         glowIntensity: isSelected ? 0.3 : 0.15,
         padding: const EdgeInsets.all(14),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Container(
-              width: 50,
-              height: 50,
-              decoration: BoxDecoration(
-                color: AppColors.neonGreen.withOpacity(0.15),
-                shape: BoxShape.circle,
-                border: Border.all(color: AppColors.neonGreen, width: 2),
-              ),
-              child: const Icon(Icons.elderly, color: AppColors.neonGreen),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    elderly.name,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
+            Row(
+              children: [
+                Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    color: AppColors.neonGreen.withOpacity(0.15),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.neonGreen, width: 2),
                   ),
-                  Row(
+                  child: const Icon(Icons.elderly, color: AppColors.neonGreen),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.neonGreen.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
+                      Text(
+                        elderly.name,
+                        style: const TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
                         ),
-                        child: Text(
-                          isSelected ? '📺 Watching' : '✓ Connected',
-                          style: TextStyle(
-                            fontSize: 10, 
-                            color: isSelected ? AppColors.neonGreen : AppColors.neonCyan,
+                      ),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: AppColors.neonGreen.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              isSelected ? '📺 Watching' : '✓ Connected',
+                              style: TextStyle(
+                                fontSize: 10, 
+                                color: isSelected ? AppColors.neonGreen : AppColors.neonCyan,
+                              ),
+                            ),
                           ),
-                        ),
+                        ],
                       ),
                     ],
                   ),
-                ],
-              ),
+                ),
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: (isSelected ? AppColors.neonGreen : AppColors.neonCyan).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(
+                    isSelected ? Icons.stop_circle : Icons.videocam, 
+                    color: isSelected ? AppColors.neonGreen : AppColors.neonCyan, 
+                    size: 20,
+                  ),
+                ),
+              ],
             ),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: (isSelected ? AppColors.neonGreen : AppColors.neonCyan).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(
-                isSelected ? Icons.stop_circle : Icons.videocam, 
-                color: isSelected ? AppColors.neonGreen : AppColors.neonCyan, 
-                size: 20,
-              ),
-            ),
+            const SizedBox(height: 12),
+            // Nutrition Summary
+            _PatientNutritionSummary(elderlyId: elderly.id),
           ],
         ),
+      ),
+    );
+  }
+}
+
+// ============= Patient Nutrition Summary Widget =============
+
+class _PatientNutritionSummary extends ConsumerStatefulWidget {
+  final String elderlyId;
+  
+  const _PatientNutritionSummary({required this.elderlyId});
+
+  @override
+  ConsumerState<_PatientNutritionSummary> createState() => _PatientNutritionSummaryState();
+}
+
+class _PatientNutritionSummaryState extends ConsumerState<_PatientNutritionSummary> {
+  bool _isLoading = true;
+  int _calories = 0;
+  int _caloriesTarget = 1800;
+  int _hydrationGlasses = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNutritionData();
+  }
+
+  Future<void> _loadNutritionData() async {
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.get('/api/nutrition/daily-summary/${widget.elderlyId}');
+      if (response.success && response.data != null && mounted) {
+        setState(() {
+          _calories = (response.data['total_calories'] as num?)?.toInt() ?? 0;
+          _caloriesTarget = (response.data['target_calories'] as num?)?.toInt() ?? 1800;
+        });
+      }
+      
+      final hydrationResponse = await api.get('/api/nutrition/hydration/${widget.elderlyId}');
+      if (hydrationResponse.success && hydrationResponse.data != null && mounted) {
+        setState(() {
+          _hydrationGlasses = (hydrationResponse.data['glasses'] as num?)?.toInt() ?? 0;
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading patient nutrition: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const SizedBox(
+        height: 30,
+        child: Center(
+          child: SizedBox(
+            width: 14,
+            height: 14,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        ),
+      );
+    }
+
+    final caloriePercent = _caloriesTarget > 0 ? (_calories / _caloriesTarget * 100).clamp(0, 100).toInt() : 0;
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surfaceLight.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.local_fire_department, color: AppColors.neonOrange, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                '$_calories cal ($caloriePercent%)',
+                style: const TextStyle(fontSize: 11, color: AppColors.neonOrange, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+          Container(width: 1, height: 20, color: AppColors.glassBorder),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.water_drop, color: AppColors.neonPurple, size: 16),
+              const SizedBox(width: 4),
+              Text(
+                '$_hydrationGlasses/8 glasses',
+                style: const TextStyle(fontSize: 11, color: AppColors.neonPurple, fontWeight: FontWeight.w500),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
