@@ -65,6 +65,19 @@ from .models import (
     get_live_fall_detector,
 )
 
+# Video source configuration (camera vs simulated)
+from .video_config import (
+    get_config as get_video_config,
+    save_config as save_video_config,
+    update_source_type,
+    update_camera_index,
+    get_active_source,
+    is_camera_mode,
+    get_fallback_video_id,
+    VideoConfig,
+    CameraInfo,
+)
+
 router = APIRouter()
 
 # Thread pool for MJPEG streaming - isolated from main event loop
@@ -1903,6 +1916,198 @@ async def async_mjpeg_generator(video_path: str):
         future.cancel()
 
 
+def generate_camera_frames(camera_index: int) -> Generator[bytes, None, None]:
+    """
+    Generator function that yields MJPEG frames from a live camera.
+    Uses OpenCV VideoCapture with camera index (0=webcam, 1=USB1, 2=USB2, etc.)
+    """
+    cap = None
+    config = get_video_config()
+    settings = config.settings
+    
+    try:
+        logger.info(f"📷 Opening camera at index: {camera_index}")
+        cap = cv2.VideoCapture(camera_index)
+        
+        if not cap.isOpened():
+            logger.error(f"Cannot open camera at index: {camera_index}")
+            # Try fallback to simulated video if enabled
+            if config.fallback_to_simulated:
+                fallback_video = get_fallback_video_id()
+                logger.info(f"🔄 Falling back to simulated video: {fallback_video}")
+                if fallback_video in VIDEO_FILES:
+                    video_path = VIDEO_DIR / VIDEO_FILES[fallback_video]
+                    yield from generate_mjpeg_frames(str(video_path))
+            return
+        
+        # Set camera properties for better performance
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.frame_width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.frame_height)
+        cap.set(cv2.CAP_PROP_FPS, settings.fps_limit)
+        
+        logger.info(f"📷 Live camera stream started (index: {camera_index})")
+        frame_count = 0
+        frame_interval = 1.0 / settings.fps_limit
+        
+        while True:
+            ret, frame = cap.read()
+            
+            if not ret:
+                logger.warning(f"Failed to read frame from camera {camera_index}")
+                # Brief pause before retrying
+                time.sleep(0.1)
+                continue
+            
+            frame_count += 1
+            
+            # Resize frame to configured dimensions
+            frame = cv2.resize(frame, (settings.frame_width, settings.frame_height))
+            
+            # Encode frame to JPEG
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, settings.jpeg_quality])
+            
+            if not ret:
+                continue
+            
+            frame_bytes = buffer.tobytes()
+            
+            # Yield frame in multipart format
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n'
+            )
+            
+            # Control frame rate
+            time.sleep(frame_interval)
+            
+    except GeneratorExit:
+        logger.info(f"🛑 Camera stream closed by client")
+    except Exception as e:
+        logger.error(f"[Camera Stream Error] {e}")
+    finally:
+        if cap is not None:
+            cap.release()
+            logger.info(f"📷 Camera stream ended, camera released")
+
+
+async def async_camera_generator(camera_index: int):
+    """
+    Async wrapper that runs the blocking camera generator in a thread pool.
+    This prevents blocking the main asyncio event loop.
+    """
+    loop = asyncio.get_event_loop()
+    
+    # Create a queue for frame communication between threads
+    frame_queue = asyncio.Queue(maxsize=5)
+    stop_event = threading.Event()
+    
+    def producer():
+        """Runs in worker thread - produces frames from camera"""
+        try:
+            for frame in generate_camera_frames(camera_index):
+                if stop_event.is_set():
+                    break
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        frame_queue.put(frame), loop
+                    ).result(timeout=1.0)
+                except Exception:
+                    break
+        except Exception as e:
+            logger.error(f"[Camera Producer Error] {e}")
+        finally:
+            asyncio.run_coroutine_threadsafe(
+                frame_queue.put(None), loop  # Signal end
+            )
+    
+    # Start producer in thread pool
+    future = mjpeg_thread_pool.submit(producer)
+    
+    try:
+        while True:
+            frame = await frame_queue.get()
+            if frame is None:
+                break
+            yield frame
+    except asyncio.CancelledError:
+        logger.info("Camera stream cancelled")
+    finally:
+        stop_event.set()
+        future.cancel()
+
+
+@router.get("/video/live")
+async def get_live_video(camera_index: Optional[int] = None):
+    """
+    Stream live video from connected camera (webcam/USB camera).
+    
+    If source_type in config is 'simulated', falls back to pre-recorded video.
+    Uses camera_index from config if not specified in query parameter.
+    
+    Args:
+        camera_index: Optional camera index (0=webcam, 1=USB1, 2=USB2, etc.)
+                     If not provided, uses value from config
+    """
+    config = get_video_config()
+    
+    logger.info(f"")
+    logger.info(f"{'='*60}")
+    logger.info(f"📷 LIVE VIDEO STREAM REQUEST")
+    logger.info(f"{'='*60}")
+    logger.info(f"  📋 Config source_type: {config.source_type}")
+    logger.info(f"  📋 Config camera_index: {config.camera_index}")
+    logger.info(f"  📋 Requested camera_index: {camera_index}")
+    
+    # Use config camera_index if not specified
+    actual_camera_index = camera_index if camera_index is not None else config.camera_index
+    
+    # Check if we should use live camera or simulated video
+    if config.source_type == "camera":
+        logger.info(f"  📷 Using LIVE camera at index: {actual_camera_index}")
+        logger.info(f"{'='*60}")
+        
+        return StreamingResponse(
+            async_camera_generator(actual_camera_index),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+    else:
+        # Use simulated video
+        video_id = config.simulated_video_id
+        logger.info(f"  🎬 Using SIMULATED video: {video_id}")
+        
+        if video_id not in VIDEO_FILES:
+            logger.error(f"  ❌ Simulated video not found: {video_id}")
+            raise HTTPException(status_code=404, detail=f"Simulated video '{video_id}' not configured")
+        
+        video_path = VIDEO_DIR / VIDEO_FILES[video_id]
+        
+        if not _check_video_exists(video_path):
+            logger.error(f"  ❌ Video file not found: {video_path}")
+            raise HTTPException(status_code=404, detail=f"Video file not found: {video_path}")
+        
+        logger.info(f"  📤 Starting simulated stream...")
+        logger.info(f"{'='*60}")
+        
+        return StreamingResponse(
+            async_mjpeg_generator(str(video_path)),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+                "Connection": "keep-alive",
+                "Access-Control-Allow-Origin": "*",
+            }
+        )
+
+
 @router.get("/video/{video_id}")
 async def get_video(video_id: str):
     """
@@ -2381,3 +2586,238 @@ async def alert_socket(websocket: WebSocket, guardian_id: str):
             
     except WebSocketDisconnect:
         print(f"Guardian {guardian_id} disconnected from alert socket")
+
+
+# ============= Video Configuration Endpoints =============
+
+class VideoConfigUpdate(BaseModel):
+    """Request model for updating video configuration."""
+    source_type: Optional[str] = None  # "camera" or "simulated"
+    camera_index: Optional[int] = None
+    simulated_video_id: Optional[str] = None
+    fallback_to_simulated: Optional[bool] = None
+
+
+@router.get("/video-config")
+async def get_video_configuration():
+    """
+    Get current video source configuration.
+    
+    Returns:
+        Current config including source_type, camera_index, available cameras, etc.
+    """
+    config = get_video_config()
+    active_source = get_active_source()
+    
+    return {
+        "config": {
+            "source_type": config.source_type,
+            "camera_index": config.camera_index,
+            "fallback_to_simulated": config.fallback_to_simulated,
+            "simulated_video_id": config.simulated_video_id,
+            "settings": config.settings.model_dump()
+        },
+        "cameras": [cam.model_dump() for cam in config.cameras],
+        "active_source": active_source,
+        "available_videos": list(VIDEO_FILES.keys())
+    }
+
+
+@router.put("/video-config")
+async def update_video_configuration(update: VideoConfigUpdate):
+    """
+    Update video source configuration.
+    
+    Args:
+        update: Fields to update (only provided fields are updated)
+    
+    Returns:
+        Updated configuration
+    """
+    config = get_video_config()
+    
+    if update.source_type is not None:
+        if update.source_type not in ["camera", "simulated"]:
+            raise HTTPException(status_code=400, detail="source_type must be 'camera' or 'simulated'")
+        config.source_type = update.source_type
+        logger.info(f"🎥 Updated source_type to: {update.source_type}")
+    
+    if update.camera_index is not None:
+        if update.camera_index < 0:
+            raise HTTPException(status_code=400, detail="camera_index must be >= 0")
+        config.camera_index = update.camera_index
+        logger.info(f"📷 Updated camera_index to: {update.camera_index}")
+    
+    if update.simulated_video_id is not None:
+        if update.simulated_video_id not in VIDEO_FILES:
+            raise HTTPException(status_code=400, detail=f"Video '{update.simulated_video_id}' not in catalog")
+        config.simulated_video_id = update.simulated_video_id
+        logger.info(f"🎬 Updated simulated_video_id to: {update.simulated_video_id}")
+    
+    if update.fallback_to_simulated is not None:
+        config.fallback_to_simulated = update.fallback_to_simulated
+        logger.info(f"🔄 Updated fallback_to_simulated to: {update.fallback_to_simulated}")
+    
+    # Save updated config
+    save_video_config(config)
+    
+    return {
+        "message": "Configuration updated successfully",
+        "config": {
+            "source_type": config.source_type,
+            "camera_index": config.camera_index,
+            "fallback_to_simulated": config.fallback_to_simulated,
+            "simulated_video_id": config.simulated_video_id
+        }
+    }
+
+
+@router.post("/video-config/switch-to-camera")
+async def switch_to_camera(camera_index: int = 0):
+    """
+    Quick endpoint to switch to live camera mode.
+    
+    Args:
+        camera_index: Camera to use (0=webcam, 1=USB1, 2=USB2)
+    """
+    config = get_video_config()
+    config.source_type = "camera"
+    config.camera_index = camera_index
+    save_video_config(config)
+    
+    logger.info(f"📷 Switched to LIVE camera mode (index: {camera_index})")
+    
+    return {
+        "message": f"Switched to live camera at index {camera_index}",
+        "source_type": "camera",
+        "camera_index": camera_index,
+        "stream_url": "/api/guardian/video/live"
+    }
+
+
+@router.post("/video-config/switch-to-simulated")
+async def switch_to_simulated(video_id: str = "fall_indoor_1"):
+    """
+    Quick endpoint to switch to simulated/pre-recorded video mode.
+    
+    Args:
+        video_id: ID of the pre-recorded video to use
+    """
+    if video_id not in VIDEO_FILES:
+        raise HTTPException(status_code=400, detail=f"Video '{video_id}' not in catalog. Available: {list(VIDEO_FILES.keys())}")
+    
+    config = get_video_config()
+    config.source_type = "simulated"
+    config.simulated_video_id = video_id
+    save_video_config(config)
+    
+    logger.info(f"🎬 Switched to SIMULATED video mode (video: {video_id})")
+    
+    return {
+        "message": f"Switched to simulated video: {video_id}",
+        "source_type": "simulated",
+        "video_id": video_id,
+        "stream_url": "/api/guardian/video/live"
+    }
+
+
+@router.get("/cameras/test/{camera_index}")
+async def test_camera(camera_index: int):
+    """
+    Test if a camera at the given index is available.
+    
+    Args:
+        camera_index: Camera index to test (0, 1, 2, ...)
+    
+    Returns:
+        Camera availability status and basic info
+    """
+    logger.info(f"🔍 Testing camera at index: {camera_index}")
+    
+    try:
+        cap = cv2.VideoCapture(camera_index)
+        
+        if not cap.isOpened():
+            return {
+                "available": False,
+                "camera_index": camera_index,
+                "message": f"No camera found at index {camera_index}"
+            }
+        
+        # Try to read a frame
+        ret, frame = cap.read()
+        
+        if not ret:
+            cap.release()
+            return {
+                "available": False,
+                "camera_index": camera_index,
+                "message": f"Camera at index {camera_index} opened but failed to capture frame"
+            }
+        
+        # Get camera properties
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        
+        cap.release()
+        
+        return {
+            "available": True,
+            "camera_index": camera_index,
+            "resolution": f"{width}x{height}",
+            "fps": fps,
+            "message": f"Camera at index {camera_index} is available"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error testing camera {camera_index}: {e}")
+        return {
+            "available": False,
+            "camera_index": camera_index,
+            "message": f"Error testing camera: {str(e)}"
+        }
+
+
+@router.get("/cameras/scan")
+async def scan_cameras(max_index: int = 5):
+    """
+    Scan for available cameras on the system.
+    
+    Args:
+        max_index: Maximum camera index to check (default: 5)
+    
+    Returns:
+        List of available cameras with their properties
+    """
+    logger.info(f"🔍 Scanning for cameras (0 to {max_index})...")
+    
+    available_cameras = []
+    
+    for i in range(max_index + 1):
+        try:
+            cap = cv2.VideoCapture(i)
+            
+            if cap.isOpened():
+                ret, _ = cap.read()
+                if ret:
+                    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    fps = cap.get(cv2.CAP_PROP_FPS)
+                    
+                    available_cameras.append({
+                        "index": i,
+                        "resolution": f"{width}x{height}",
+                        "fps": fps
+                    })
+                    logger.info(f"  ✅ Camera {i}: {width}x{height} @ {fps}fps")
+                
+                cap.release()
+        except Exception as e:
+            logger.debug(f"  ❌ Camera {i}: {e}")
+    
+    return {
+        "scanned_range": f"0-{max_index}",
+        "found_count": len(available_cameras),
+        "cameras": available_cameras
+    }

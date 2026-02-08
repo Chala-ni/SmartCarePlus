@@ -40,7 +40,10 @@ from core.database import init_firebase, get_db, is_mock_mode
 from core.websocket import connection_manager
 from core.threading import video_worker_pool, ml_worker_pool
 from core.notifications import fcm_service
-from shared.utils import setup_logger
+from shared.utils import setup_logger, init_session_log
+
+# Initialize session log file (clears on each server startup)
+init_session_log()
 
 # Setup logging
 logger = setup_logger("smartcare.main", level=logging.DEBUG)

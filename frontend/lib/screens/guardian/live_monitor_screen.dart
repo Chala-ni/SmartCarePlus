@@ -110,7 +110,10 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
   }
   
   String _getVideoUrl(String videoId) {
-    return '${ApiConfig.streamBaseUrl}${ApiConfig.guardian}/video/$videoId';
+    // Use /video/live endpoint which respects backend video_config.json
+    // If source_type=camera, streams from webcam/USB camera
+    // If source_type=simulated, streams the configured video
+    return '${ApiConfig.streamBaseUrl}${ApiConfig.guardian}/video/live';
   }
 
   void _startStream() {

@@ -117,7 +117,16 @@ class ElderlyInfo {
   }
 
   /// Get the full video URL for streaming
+  /// Uses /video/live endpoint which checks backend config for camera vs simulated mode
   String getVideoUrl(String baseUrl) {
+    // Use the live endpoint which respects video_config.json settings
+    // If source_type=camera, streams from webcam/USB camera
+    // If source_type=simulated, streams the configured simulated_video_id
+    return '$baseUrl/api/guardian/video/live';
+  }
+  
+  /// Get video URL for a specific pre-recorded video (bypasses live camera config)
+  String getSimulatedVideoUrl(String baseUrl) {
     return '$baseUrl/api/guardian/video/$assignedVideoId';
   }
 }

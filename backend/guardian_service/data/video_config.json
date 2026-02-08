@@ -1,0 +1,29 @@
+{
+    "source_type": "camera",  
+    "camera_index": 0,
+    "fallback_to_simulated": true,
+    "cameras": [
+        {
+            "index": 0,
+            "name": "Webcam (Built-in)",
+            "location": "Main Camera"
+        },
+        {
+            "index": 1,
+            "name": "USB Camera 1",
+            "location": "Living Room"
+        },
+        {
+            "index": 2,
+            "name": "USB Camera 2",
+            "location": "Bedroom"
+        }
+    ],
+    "simulated_video_id": "fall-01-cam0",
+    "settings": {
+        "frame_width": 640,
+        "frame_height": 480,
+        "fps_limit": 20,
+        "jpeg_quality": 80
+    }
+}

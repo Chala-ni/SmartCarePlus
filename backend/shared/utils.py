@@ -6,6 +6,8 @@ Logging, validators, and response models.
 
 import logging
 import sys
+import os
+from pathlib import Path
 from typing import Any, Optional, TypeVar, Generic
 from datetime import datetime, timezone
 from functools import wraps
@@ -18,6 +20,42 @@ from fastapi import HTTPException
 # ============================================
 # Logging Configuration
 # ============================================
+
+# Global log file path - cleared on each server startup
+LOG_DIR = Path(__file__).parent.parent / "logs"
+SESSION_LOG_FILE = LOG_DIR / "session.log"
+_file_handler: Optional[logging.FileHandler] = None
+
+
+def init_session_log():
+    """Initialize session log file - called once at server startup to clear old logs."""
+    global _file_handler
+    
+    # Create logs directory
+    LOG_DIR.mkdir(exist_ok=True)
+    
+    # Clear/create the session log file (write mode = overwrites)
+    with open(SESSION_LOG_FILE, 'w') as f:
+        f.write(f"{'='*80}\n")
+        f.write(f"SMARTCARE+ SESSION LOG\n")
+        f.write(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"{'='*80}\n\n")
+    
+    # Create file handler for all loggers
+    _file_handler = logging.FileHandler(SESSION_LOG_FILE, mode='a', encoding='utf-8')
+    _file_handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter(
+        fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    _file_handler.setFormatter(formatter)
+    
+    # Add to root logger so ALL logs go to file
+    root_logger = logging.getLogger()
+    root_logger.addHandler(_file_handler)
+    
+    print(f"📝 Session log: {SESSION_LOG_FILE}")
+
 
 def setup_logger(name: str = "smartcare", level: int = logging.INFO) -> logging.Logger:
     """
@@ -46,7 +84,6 @@ def setup_logger(name: str = "smartcare", level: int = logging.INFO) -> logging.
     logger.addHandler(console_handler)
     
     return logger
-
 
 # Default logger for imports
 logger = setup_logger("smartcare")
