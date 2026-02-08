@@ -29,6 +29,38 @@ class CaregiverDashboard extends ConsumerStatefulWidget {
 class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
   int _currentIndex = 0;
   ElderlyInfo? _selectedPatientForMonitor;
+  int _unacknowledgedAlertCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAlertCount();
+  }
+
+  Future<void> _fetchAlertCount() async {
+    try {
+      final profile = ref.read(userProfileProvider);
+      if (profile?.uid == null) return;
+      
+      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
+      final response = await http.get(
+        Uri.parse('$baseUrl/guardian/alerts/${profile!.uid}'),
+      );
+      
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final alerts = (data['alerts'] as List?) ?? [];
+        final unacknowledged = alerts.where((a) => a['resolved'] != true).toList();
+        if (mounted) {
+          setState(() {
+            _unacknowledgedAlertCount = unacknowledged.length;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching alert count: $e');
+    }
+  }
 
   void _navigateToPatients([ElderlyInfo? patient]) {
     setState(() {
@@ -101,10 +133,14 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
 
   Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label, Color color) {
     final isSelected = _currentIndex == index;
-    final hasBadge = index == 2; // Tasks tab
+    final isAlertsTab = index == 3; // Alerts tab
+    final badgeCount = isAlertsTab ? _unacknowledgedAlertCount : (index == 2 ? 5 : 0); // 5 for tasks demo
     
     return GestureDetector(
-      onTap: () => setState(() => _currentIndex = index),
+      onTap: () {
+        setState(() => _currentIndex = index);
+        if (isAlertsTab) _fetchAlertCount(); // Refresh on navigation
+      },
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -144,7 +180,7 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
                 ),
               ],
             ),
-            if (hasBadge)
+            if (badgeCount > 0)
               Positioned(
                 right: -4,
                 top: -4,
@@ -152,19 +188,19 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
                   width: 18,
                   height: 18,
                   decoration: BoxDecoration(
-                    color: AppColors.neonOrange,
+                    color: isAlertsTab ? AppColors.neonRed : AppColors.neonOrange,
                     shape: BoxShape.circle,
                     boxShadow: [
                       BoxShadow(
-                        color: AppColors.neonOrange.withOpacity(0.4),
+                        color: (isAlertsTab ? AppColors.neonRed : AppColors.neonOrange).withOpacity(0.4),
                         blurRadius: 6,
                       ),
                     ],
                   ),
-                  child: const Center(
+                  child: Center(
                     child: Text(
-                      '5',
-                      style: TextStyle(
+                      badgeCount > 9 ? '9+' : '$badgeCount',
+                      style: const TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
@@ -196,11 +232,22 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
   int _alertCount = 0;
   int _taskCount = 0;
   bool _isLoading = false;
+  Timer? _refreshTimer;
   
   @override
   void initState() {
     super.initState();
     _fetchData();
+    // Refresh alerts every 30 seconds for real-time updates
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      if (mounted) _fetchData();
+    });
+  }
+  
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
   
   Future<void> _fetchData() async {
@@ -216,11 +263,12 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
       );
       
       if (alertsResponse.statusCode == 200) {
-        final data = json.decode(alertsResponse.body) as List<dynamic>;
-        final unacknowledged = data.where((a) => a['acknowledged'] != true).toList();
+        final data = json.decode(alertsResponse.body);
+        final alertsList = (data['alerts'] as List?) ?? [];
+        final unacknowledged = alertsList.where((a) => a['resolved'] != true).toList();
         if (mounted) {
           setState(() {
-            _recentAlerts = List<Map<String, dynamic>>.from(unacknowledged);
+            _recentAlerts = List<Map<String, dynamic>>.from(unacknowledged.take(5));
             _alertCount = unacknowledged.length;
           });
         }
@@ -431,20 +479,118 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
             
             const SizedBox(height: 24),
             
-            // Recent Activity
-            const Text(
-              'Recent Activity',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
-              ),
+            // Recent Alerts
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Recent Alerts',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => widget.onNavigateToPatients(),
+                  child: const Text('View All', style: TextStyle(color: AppColors.neonCyan)),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
             
-            _buildActivityLog('Completed physio session', 'Margaret', '30 min ago', AppColors.neonGreen),
-            _buildActivityLog('Updated meal plan', 'Robert', '1 hour ago', AppColors.neonOrange),
-            _buildActivityLog('Fall risk assessment', 'Eleanor', '2 hours ago', AppColors.neonCyan),
+            if (_recentAlerts.isEmpty)
+              GlassmorphicCard(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.check_circle_outline, color: AppColors.neonGreen.withOpacity(0.7)),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'No recent alerts. All patients are doing well.',
+                        style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ..._recentAlerts.take(3).map((alert) {
+                final type = alert['type'] as String? ?? 'unknown';
+                final severity = alert['severity'] as String? ?? 'info';
+                final elderlyName = alert['elderly_name'] ?? alert['elderly_id'] ?? 'Unknown';
+                final createdAt = alert['created_at'] ?? '';
+                
+                IconData icon = Icons.notifications;
+                Color color = AppColors.neonCyan;
+                String title = alert['title'] ?? type;
+                
+                if (type == 'fall') {
+                  icon = Icons.warning;
+                  color = AppColors.neonRed;
+                } else if (type == 'gait') {
+                  icon = Icons.directions_walk;
+                  color = AppColors.neonOrange;
+                } else if (type == 'inactivity') {
+                  icon = Icons.timer_off;
+                  color = AppColors.neonOrange;
+                }
+                
+                if (severity == 'critical') {
+                  color = AppColors.neonRed;
+                }
+                
+                String timeAgo = createdAt;
+                try {
+                  final dt = DateTime.parse(createdAt);
+                  final diff = DateTime.now().difference(dt);
+                  if (diff.inMinutes < 60) {
+                    timeAgo = '${diff.inMinutes} min ago';
+                  } else if (diff.inHours < 24) {
+                    timeAgo = '${diff.inHours}h ago';
+                  } else {
+                    timeAgo = '${diff.inDays}d ago';
+                  }
+                } catch (_) {}
+                
+                return _buildAlertItem(title, elderlyName, timeAgo, icon, color);
+              }),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildAlertItem(String title, String elderlyName, String time, IconData icon, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: GlassmorphicCard(
+        glowColor: color,
+        glowIntensity: 0.1,
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  const SizedBox(height: 2),
+                  Text(elderlyName, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
+                ],
+              ),
+            ),
+            Text(time, style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
           ],
         ),
       ),
@@ -793,6 +939,7 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
   bool _gaitAbnormal = false;
   double _inactivitySeconds = 0;
   bool _inactivityAlert = false;
+  bool _fallAlertShown = false;
   bool _gaitAlertShown = false;
   bool _inactivityAlertShown = false;
   
@@ -917,8 +1064,9 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
           }
         });
         
-        // Show alert if fall detected
-        if (_fallDetected && mounted) {
+        // Show alert if fall detected (once per session)
+        if (_fallDetected && !_fallAlertShown && mounted) {
+          _fallAlertShown = true;
           _showFallAlert();
         }
         
@@ -955,6 +1103,9 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
     _bufferReady = false;
     _lastCapturedFrame = null;
     _lastFrameSentAt = null;
+    _fallAlertShown = false;
+    _gaitAlertShown = false;
+    _inactivityAlertShown = false;
     
     // Start session on backend
     try {

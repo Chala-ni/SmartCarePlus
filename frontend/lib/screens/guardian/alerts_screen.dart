@@ -247,8 +247,8 @@ class _AlertsScreenState extends ConsumerState<AlertsScreen> {
                   const SizedBox(height: 4),
                   Row(
                     children: [
-                      Text(elderlyName, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary)),
-                      const Text(' • ', style: TextStyle(color: AppColors.textSecondary)),
+                      Flexible(child: Text(elderlyName, style: const TextStyle(fontSize: 11, color: AppColors.textSecondary), maxLines: 1, overflow: TextOverflow.ellipsis)),
+                      const Text(' \u2022 ', style: TextStyle(color: AppColors.textSecondary)),
                       Text(severity.toUpperCase(), style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
                     ],
                   ),

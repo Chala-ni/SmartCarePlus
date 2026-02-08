@@ -27,6 +27,38 @@ class GuardianDashboard extends ConsumerStatefulWidget {
 class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
   int _currentIndex = 0;
   ElderlyInfo? _selectedElderlyForMonitor;
+  int _unacknowledgedAlertCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchAlertCount();
+  }
+
+  Future<void> _fetchAlertCount() async {
+    try {
+      final profile = ref.read(userProfileProvider);
+      if (profile?.uid == null) return;
+      
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/alerts/${profile!.uid}',
+        requireAuth: false,
+      );
+      
+      if (response.success && response.data != null) {
+        final alerts = (response.data!['alerts'] as List?) ?? [];
+        final unacknowledged = alerts.where((a) => a['resolved'] != true).toList();
+        if (mounted) {
+          setState(() {
+            _unacknowledgedAlertCount = unacknowledged.length;
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching alert count: $e');
+    }
+  }
 
   void _navigateToMonitor([ElderlyInfo? elderly]) {
     setState(() {
@@ -97,10 +129,14 @@ class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
 
   Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label, Color color) {
     final isSelected = _currentIndex == index;
-    final hasNotification = index == 2; // Alerts tab
+    final isAlertsTab = index == 2; // Alerts tab
+    final badgeCount = isAlertsTab ? _unacknowledgedAlertCount : 0;
     
     return GestureDetector(
-      onTap: () => setState(() => _currentIndex = index),
+      onTap: () {
+        setState(() => _currentIndex = index);
+        if (isAlertsTab) _fetchAlertCount(); // Refresh on navigation
+      },
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
@@ -140,7 +176,7 @@ class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
                 ),
               ],
             ),
-            if (hasNotification)
+            if (badgeCount > 0)
               Positioned(
                 right: -4,
                 top: -4,
@@ -157,10 +193,10 @@ class _GuardianDashboardState extends ConsumerState<GuardianDashboard> {
                       ),
                     ],
                   ),
-                  child: const Center(
+                  child: Center(
                     child: Text(
-                      '3',
-                      style: TextStyle(
+                      badgeCount > 9 ? '9+' : '$badgeCount',
+                      style: const TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
                         color: Colors.white,
@@ -193,6 +229,7 @@ class _GuardianHomeTabState extends ConsumerState<_GuardianHomeTab> {
   int _activeAlertCount = 0;
   int _criticalCount = 0;
   bool _isLoadingAlerts = false;
+  Timer? _refreshTimer;
   
   @override
   void initState() {
@@ -202,8 +239,18 @@ class _GuardianHomeTabState extends ConsumerState<_GuardianHomeTab> {
         _hasLoadedElderly = true;
         ref.read(connectionProvider.notifier).loadMyElderly();
         _fetchAlerts();
+        // Refresh alerts every 30 seconds for real-time updates
+        _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+          if (mounted) _fetchAlerts();
+        });
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    super.dispose();
   }
   
   Future<void> _fetchAlerts() async {
@@ -990,6 +1037,7 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
   bool _gaitAbnormal = false;
   double _inactivitySeconds = 0;
   bool _inactivityAlert = false;
+  bool _fallAlertShown = false;
   bool _gaitAlertShown = false;
   bool _inactivityAlertShown = false;
   
@@ -1113,8 +1161,9 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
           }
         });
         
-        // Show alert if fall detected
-        if (_fallDetected && mounted) {
+        // Show alert if fall detected (once per session)
+        if (_fallDetected && !_fallAlertShown && mounted) {
+          _fallAlertShown = true;
           _showFallAlert();
         }
         
@@ -1151,6 +1200,9 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
     _bufferReady = false;
     _lastCapturedFrame = null;
     _lastFrameSentAt = null;
+    _fallAlertShown = false;
+    _gaitAlertShown = false;
+    _inactivityAlertShown = false;
     
     // Start session on backend
     try {
