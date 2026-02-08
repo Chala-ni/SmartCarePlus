@@ -751,11 +751,12 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
   /// Send a frame to the backend for live detection
   Future<void> _sendFrameForDetection() async {
     if (_currentVideoId == null || _currentVideoId!.isEmpty || _lastCapturedFrame == null) return;
+    if (_isAnalyzing) return; // Don't pile up requests
     
-    // Throttle: send max 1 frame per second
+    // Throttle: send max 5 frames per second
     final now = DateTime.now();
     if (_lastFrameSentAt != null && 
-        now.difference(_lastFrameSentAt!).inMilliseconds < 900) {
+        now.difference(_lastFrameSentAt!).inMilliseconds < 150) {
       return;
     }
     _lastFrameSentAt = now;
@@ -861,9 +862,9 @@ class _PatientsTabState extends ConsumerState<_PatientsTab> {
       debugPrint('Failed to start stream session: $e');
     }
     
-    // Start periodic frame sending (1 fps)
+    // Start periodic frame sending (5 fps for ~6 second detection)
     _analysisTimer?.cancel();
-    _analysisTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+    _analysisTimer = Timer.periodic(const Duration(milliseconds: 200), (_) {
       if (_isStreaming && mounted && _lastCapturedFrame != null) {
         _sendFrameForDetection();
       }

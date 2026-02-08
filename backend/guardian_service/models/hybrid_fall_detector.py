@@ -17,6 +17,7 @@ import numpy as np
 import cv2
 import time
 import logging
+import threading
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
@@ -1159,6 +1160,11 @@ class LiveFallDetector:
         # Performance tracking
         self.processing_times: deque = deque(maxlen=100)
         
+        # Background DL inference state
+        self._dl_running = False
+        self._last_dl_score = 0.0
+        self._dl_lock = threading.Lock()
+        
         logger.info(f"LiveFallDetector initialized (DL: {enable_dl}, FPS: {target_fps})")
     
     def reset(self):
@@ -1167,7 +1173,24 @@ class LiveFallDetector:
         self.hybrid_detector.reset()
         self.state = LiveDetectionState()
         self.processing_times.clear()
+        self._dl_running = False
+        self._last_dl_score = 0.0
         logger.info("LiveFallDetector reset")
+    
+    def _run_dl_background(self, frames: list):
+        """Run DL inference in background thread — does NOT block process_frame."""
+        self._dl_running = True
+        try:
+            start = time.time()
+            dl_score, _ = self.hybrid_detector.dl_detector.analyze_frames(frames)
+            elapsed = (time.time() - start) * 1000
+            with self._dl_lock:
+                self._last_dl_score = dl_score
+            logger.info(f"🧠 DL inference complete: score={dl_score:.3f} ({elapsed:.0f}ms)")
+        except Exception as e:
+            logger.error(f"DL background inference failed: {e}")
+        finally:
+            self._dl_running = False
     
     def process_frame(self, frame: np.ndarray) -> HybridFallResult:
         """
@@ -1204,17 +1227,26 @@ class LiveFallDetector:
         
         motion_score, motion_metrics = self.hybrid_detector.motion_detector.analyze_frame(frame)
         
-        # Layer 3: DL analysis (periodic, uses buffer)
-        dl_score = 0.0
+        # Layer 3: DL analysis (NON-BLOCKING - runs in background thread)
+        dl_score = self._last_dl_score * 0.95 if self._last_dl_score > 0 else 0.0
+        if self.state.last_result and self.state.last_result.dl_score > dl_score:
+            dl_score = self.state.last_result.dl_score * 0.95
+        
         if (self.enable_dl and 
             self.state.frame_count % self.DL_ANALYSIS_INTERVAL == 0 and
-            len(self.frame_buffer) >= self.BUFFER_SIZE // 2):
+            len(self.frame_buffer) >= self.BUFFER_SIZE // 2 and
+            not self._dl_running):
             
+            # Snapshot buffer for background DL analysis
             frames_for_dl = list(self.frame_buffer)
-            dl_score, _ = self.hybrid_detector.dl_detector.analyze_frames(frames_for_dl)
-        elif self.state.last_result:
-            # Carry over last DL score for intermediate frames
-            dl_score = self.state.last_result.dl_score * 0.95  # Slight decay
+            dl_thread = threading.Thread(
+                target=self._run_dl_background, 
+                args=(frames_for_dl,),
+                daemon=True,
+                name="dl-inference"
+            )
+            dl_thread.start()
+            logger.info(f"🧠 DL inference started in background (frame #{self.state.frame_count}, {len(frames_for_dl)} frames)")
         
         # Combine scores with live-optimized thresholds
         is_fall, confidence, source, reason = self._combine_live_scores(

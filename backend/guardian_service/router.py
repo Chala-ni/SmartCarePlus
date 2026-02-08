@@ -82,7 +82,7 @@ class StreamSession:
     def __init__(self, session_id: str, elderly_id: Optional[str] = None):
         self.session_id = session_id
         self.elderly_id = elderly_id
-        self.detector = LiveFallDetector(enable_dl=True, target_fps=1)  # 1 FPS from frontend
+        self.detector = LiveFallDetector(enable_dl=True, target_fps=5)  # 5 FPS from frontend
         self.created_at = time.time()
         self.last_frame_at = time.time()
         self.frame_count = 0
@@ -786,7 +786,11 @@ async def stream_analyze_frame(session_id: str, request: StreamFrameRequest):
         result = await loop.run_in_executor(analysis_thread_pool, process)
         processing_time = (time.time() - start_time) * 1000
         
-        # Log significant detections
+        # Log processing
+        if session.frame_count % 10 == 1 or result.is_fall:  
+            logger.info(f"📊 Frame #{session.frame_count} [{session_id}] "
+                        f"S={result.skeleton_score:.2f} M={result.motion_score:.2f} "
+                        f"DL={result.dl_score:.2f} ({processing_time:.0f}ms)")
         if result.is_fall:
             logger.warning(f"🚨 FALL DETECTED in session {session_id}! Confidence: {result.confidence*100:.1f}%")
         
