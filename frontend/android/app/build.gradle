@@ -41,6 +41,7 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+        coreLibraryDesugaringEnabled true
     }
 
     kotlinOptions {
@@ -92,6 +93,9 @@ flutter {
 }
 
 dependencies {
+    // Core library desugaring (required for flutter_local_notifications)
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:1.2.2'
+    
     // Firebase BoM (Bill of Materials) for version management
     implementation platform('com.google.firebase:firebase-bom:32.7.0')
     

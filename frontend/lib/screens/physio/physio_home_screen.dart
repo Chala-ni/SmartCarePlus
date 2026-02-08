@@ -100,34 +100,6 @@ class PhysioHomeScreen extends ConsumerWidget {
                     Expanded(
                       child: _buildAnalysisCard(
                         context,
-                        title: 'Gait Analysis',
-                        subtitle: 'Walk pattern & metrics',
-                        icon: Icons.directions_walk,
-                        color: AppColors.neonCyan,
-                        onTap: () => Navigator.pushNamed(context, AppRoutes.gaitAnalysis),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: _buildAnalysisCard(
-                        context,
-                        title: 'TUG Test',
-                        subtitle: 'Timed Up & Go',
-                        icon: Icons.timer,
-                        color: AppColors.neonGreen,
-                        onTap: () => Navigator.pushNamed(context, AppRoutes.tugTest),
-                      ),
-                    ),
-                  ],
-                ),
-                
-                const SizedBox(height: 12),
-                
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildAnalysisCard(
-                        context,
                         title: 'Balance Test',
                         subtitle: 'Stability assessment',
                         icon: Icons.balance,
@@ -143,6 +115,34 @@ class PhysioHomeScreen extends ConsumerWidget {
                         subtitle: 'Range of motion',
                         icon: Icons.rotate_90_degrees_ccw,
                         color: AppColors.neonOrange,
+                        onTap: () {},
+                      ),
+                    ),
+                  ],
+                ),
+                
+                const SizedBox(height: 12),
+                
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildAnalysisCard(
+                        context,
+                        title: 'Exercises',
+                        subtitle: 'Daily workout routine',
+                        icon: Icons.fitness_center,
+                        color: AppColors.neonCyan,
+                        onTap: () {},
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _buildAnalysisCard(
+                        context,
+                        title: 'Progress',
+                        subtitle: 'View your history',
+                        icon: Icons.show_chart,
+                        color: AppColors.neonGreen,
                         onTap: () {},
                       ),
                     ),

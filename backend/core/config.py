@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # ML Models
     ML_MODELS_PATH: str = "ml_models"
     
+    # Email / SMTP
+    SMTP_EMAIL: str = ""
+    SMTP_PASSWORD: str = ""
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

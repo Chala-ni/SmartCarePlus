@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import '../core/services/notification_service.dart';
 
 /// User role enum
 enum UserRole { elderly, caregiver, guardian, admin }
@@ -122,6 +123,9 @@ class AuthNotifier extends StateNotifier<AuthState> {
           firebaseUser: user,
           profile: UserProfile.fromFirestore(doc),
         );
+        
+        // Save FCM token for push notifications
+        NotificationService().saveTokenToFirestore(user.uid);
       } else {
         state = AuthState(firebaseUser: user);
       }

@@ -23,8 +23,16 @@ import logging
 import io
 import time
 import threading
+import uuid
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from core.notifications import fcm_service, PushNotification, NotificationType
 
 logger = logging.getLogger(__name__)
+
+from core.database import get_db, is_mock_mode
+from core.config import settings
 
 from .models import (
     GaitAnalyzer,
@@ -339,6 +347,307 @@ class FrameAnalysisRequest(BaseModel):
     elderly_id: Optional[str] = None  # Optional elderly identifier
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# ALERT SERVICE - Firestore CRUD + Email Notifications
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# In-memory alert store (used alongside Firestore, also as fallback in mock mode)
+_alerts_store: List[dict] = []
+_alerts_lock = threading.Lock()
+
+# Track which alerts have been sent per session to avoid duplicates
+_sent_alerts: dict = {}  # session_id -> set of alert types
+
+
+def _create_alert(
+    alert_type: str,
+    severity: str,
+    title: str,
+    description: str,
+    elderly_id: str = None,
+    elderly_name: str = None,
+    session_id: str = None,
+    detection_data: dict = None,
+) -> dict:
+    """Create an alert and store it in Firestore + in-memory."""
+    alert_id = f"alert_{uuid.uuid4().hex[:12]}"
+    alert = {
+        "id": alert_id,
+        "type": alert_type,  # "fall", "gait", "inactivity"
+        "severity": severity,  # "critical", "warning", "info"
+        "title": title,
+        "description": description,
+        "elderly_id": elderly_id or "unknown",
+        "elderly_name": elderly_name or "Unknown",
+        "session_id": session_id,
+        "resolved": False,
+        "acknowledged": False,
+        "created_at": datetime.now().isoformat(),
+        "detection_data": detection_data or {},
+    }
+    
+    # Store in memory
+    with _alerts_lock:
+        _alerts_store.insert(0, alert)
+        # Keep max 100 alerts in memory
+        if len(_alerts_store) > 100:
+            _alerts_store.pop()
+    
+    # Store in Firestore
+    try:
+        db = get_db()
+        if db and not is_mock_mode():
+            db.collection("alerts").document(alert_id).set(alert)
+            logger.info(f"📝 Alert saved to Firestore: {alert_id} ({alert_type})")
+    except Exception as e:
+        logger.warning(f"Failed to save alert to Firestore: {e}")
+    
+    logger.info(f"🚨 Alert created: [{severity.upper()}] {title} for {elderly_name}")
+    
+    # Send email notification in background
+    threading.Thread(
+        target=_send_alert_email,
+        args=(alert,),
+        daemon=True,
+        name="email-alert"
+    ).start()
+    
+    # Send FCM push notification in background
+    threading.Thread(
+        target=_send_fcm_notification,
+        args=(alert,),
+        daemon=True,
+        name="fcm-alert"
+    ).start()
+    
+    return alert
+
+
+def _send_fcm_notification(alert: dict):
+    """Send FCM push notification for an alert. Runs in background thread."""
+    try:
+        db = get_db()
+        if not db or is_mock_mode():
+            logger.info(f"🔔 FCM skipped (mock mode) for alert {alert['id']}")
+            return
+        
+        elderly_id = alert.get("elderly_id", "")
+        if not elderly_id or elderly_id == "unknown":
+            return
+        
+        # Get FCM tokens from connected guardians/caregivers
+        fcm_tokens = []
+        connections = db.collection("connections").where(
+            "elderly_id", "==", elderly_id
+        ).where("status", "==", "active").get()
+        
+        for conn in connections:
+            conn_data = conn.to_dict()
+            linked_user_id = conn_data.get("linked_user_id", "")
+            if linked_user_id:
+                user_doc = db.collection("users").document(linked_user_id).get()
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    fcm_token = user_data.get("fcm_token")
+                    if fcm_token:
+                        fcm_tokens.append(fcm_token)
+        
+        if not fcm_tokens:
+            logger.info(f"🔔 No FCM tokens found for alert {alert['id']}")
+            return
+        
+        # Determine notification type
+        alert_type = alert.get("type", "fall")
+        if alert_type == "fall":
+            notif_type = NotificationType.FALL_DETECTED
+        elif alert_type == "inactivity":
+            notif_type = NotificationType.INACTIVITY_ALERT
+        else:
+            notif_type = NotificationType.FALL_DETECTED  # Default
+        
+        # Build notification
+        notification = PushNotification(
+            title=f"🚨 {alert['title']}",
+            body=alert["description"][:200],  # Truncate for mobile
+            notification_type=notif_type,
+            data={
+                "alert_id": alert["id"],
+                "elderly_id": elderly_id,
+                "alert_type": alert_type,
+                "action": "view_alert",
+            }
+        )
+        
+        # Send to all tokens
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(
+                fcm_service.send_to_multiple(fcm_tokens, notification)
+            )
+            logger.info(f"🔔 FCM sent to {len(fcm_tokens)} devices for alert {alert['id']}: {result}")
+        finally:
+            loop.close()
+            
+    except Exception as e:
+        logger.warning(f"🔔 FCM notification failed: {e}")
+
+
+def _send_alert_email(alert: dict):
+    """Send email notification for an alert. Runs in background thread."""
+    try:
+        # Get connected guardians/caregivers from Firestore
+        db = get_db()
+        recipient_emails = []
+        
+        if db and not is_mock_mode():
+            # Find connections for this elderly
+            elderly_id = alert.get("elderly_id", "")
+            if elderly_id and elderly_id != "unknown":
+                connections = db.collection("connections").where(
+                    "elderly_id", "==", elderly_id
+                ).where("status", "==", "active").get()
+                
+                for conn in connections:
+                    conn_data = conn.to_dict()
+                    linked_user_id = conn_data.get("linked_user_id", "")
+                    if linked_user_id:
+                        user_doc = db.collection("users").document(linked_user_id).get()
+                        if user_doc.exists:
+                            user_data = user_doc.to_dict()
+                            email = user_data.get("email")
+                            if email:
+                                recipient_emails.append(email)
+        
+        if not recipient_emails:
+            logger.info(f"📧 No recipient emails found for alert {alert['id']} - skipping email")
+            return
+        
+        # Build email
+        severity_emoji = {"critical": "🚨", "warning": "⚠️", "info": "ℹ️"}.get(alert["severity"], "📢")
+        
+        subject = f"{severity_emoji} SmartCare+ Alert: {alert['title']}"
+        
+        html_body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <div style="background: #1a1a2e; color: white; padding: 20px; border-radius: 10px;">
+                <h2 style="color: {'#ff4757' if alert['severity'] == 'critical' else '#ffa502' if alert['severity'] == 'warning' else '#00d2d3'};">
+                    {severity_emoji} {alert['title']}
+                </h2>
+                <p style="font-size: 16px; color: #e0e0e0;">{alert['description']}</p>
+                <hr style="border-color: #333;">
+                <p><strong>Elderly:</strong> {alert['elderly_name']}</p>
+                <p><strong>Time:</strong> {alert['created_at']}</p>
+                <p><strong>Severity:</strong> {alert['severity'].upper()}</p>
+                <p><strong>Type:</strong> {alert['type']}</p>
+                {f"<p><strong>Confidence:</strong> {alert['detection_data'].get('confidence', 'N/A')}</p>" if alert.get('detection_data') else ""}
+                <hr style="border-color: #333;">
+                <p style="color: #aaa; font-size: 12px;">
+                    This alert was automatically generated by SmartCare+ Fall Detection System.
+                    Please check on {alert['elderly_name']} immediately if this is a critical alert.
+                </p>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Try SMTP (Gmail App Password)
+        smtp_email = getattr(settings, 'SMTP_EMAIL', None) or os.environ.get('SMTP_EMAIL')
+        smtp_password = getattr(settings, 'SMTP_PASSWORD', None) or os.environ.get('SMTP_PASSWORD')
+        
+        if smtp_email and smtp_password:
+            msg = MIMEMultipart('alternative')
+            msg['Subject'] = subject
+            msg['From'] = smtp_email
+            msg['To'] = ', '.join(recipient_emails)
+            msg.attach(MIMEText(html_body, 'html'))
+            
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(smtp_email, smtp_password)
+                server.sendmail(smtp_email, recipient_emails, msg.as_string())
+            
+            logger.info(f"📧 Alert email sent to {len(recipient_emails)} recipients: {recipient_emails}")
+        else:
+            logger.info(f"📧 SMTP not configured - would send to: {recipient_emails}")
+            logger.info(f"   Subject: {subject}")
+            
+    except Exception as e:
+        logger.warning(f"📧 Failed to send alert email: {e}")
+
+
+def _check_and_create_alerts(session_id: str, result, elderly_id: str = None, elderly_name: str = None):
+    """Check detection result and create alerts if needed. Called after each frame."""
+    global _sent_alerts
+    
+    if session_id not in _sent_alerts:
+        _sent_alerts[session_id] = set()
+    
+    sent = _sent_alerts[session_id]
+    
+    # Fall alert
+    if result.is_fall and "fall" not in sent:
+        sent.add("fall")
+        confidence_pct = f"{result.confidence * 100:.0f}%"
+        _create_alert(
+            alert_type="fall",
+            severity="critical",
+            title="Fall Detected",
+            description=f"A fall has been detected for {elderly_name or 'the elderly person'}. "
+                       f"Confidence: {confidence_pct}. Immediate attention may be required.",
+            elderly_id=elderly_id,
+            elderly_name=elderly_name,
+            session_id=session_id,
+            detection_data={
+                "confidence": confidence_pct,
+                "fall_type": result.fall_type.value if result.fall_type else "unknown",
+                "detection_source": result.detection_source.value if result.detection_source else "unknown",
+                "skeleton_score": round(result.skeleton_score, 3),
+                "motion_score": round(result.motion_score, 3),
+                "dl_score": round(result.dl_score, 3),
+            }
+        )
+    
+    # Gait abnormality alert 
+    if result.gait_abnormal and "gait" not in sent:
+        sent.add("gait")
+        arthritis_pct = f"{result.dl_probabilities.get('arthritis_gait', 0) * 100:.0f}%" if result.dl_probabilities else "N/A"
+        _create_alert(
+            alert_type="gait",
+            severity="warning",
+            title="Abnormal Gait Detected",
+            description=f"Abnormal gait pattern (possible arthritis) detected for {elderly_name or 'the elderly person'}. "
+                       f"Arthritis gait probability: {arthritis_pct}. Consider a medical check-up.",
+            elderly_id=elderly_id,
+            elderly_name=elderly_name,
+            session_id=session_id,
+            detection_data={
+                "dl_activity": result.dl_activity,
+                "arthritis_gait_score": arthritis_pct,
+                "dl_probabilities": {k: f"{v*100:.1f}%" for k, v in result.dl_probabilities.items()} if result.dl_probabilities else {},
+            }
+        )
+    
+    # Inactivity alert
+    if result.inactivity_alert and "inactivity" not in sent:
+        sent.add("inactivity")
+        _create_alert(
+            alert_type="inactivity",
+            severity="warning",
+            title="Extended Inactivity",
+            description=f"No movement detected for {elderly_name or 'the elderly person'} "
+                       f"for {result.inactivity_seconds / 60:.0f} minutes. Please check on them.",
+            elderly_id=elderly_id,
+            elderly_name=elderly_name,
+            session_id=session_id,
+            detection_data={
+                "inactivity_seconds": round(result.inactivity_seconds),
+                "motion_score": round(result.motion_score, 3),
+            }
+        )
+
+
 # ============= Mock Data =============
 
 ELDERLY_DB = {
@@ -459,27 +768,72 @@ async def report_fall_alert(request: FallAlertRequest):
 
 @router.post("/sos")
 async def trigger_sos(request: SOSRequest):
-    """Trigger SOS emergency."""
+    """Trigger SOS emergency - creates alert and notifies guardians."""
+    # Get elderly info from Firestore
+    elderly_name = "Elderly"
+    try:
+        db = get_db()
+        if db and not is_mock_mode():
+            elderly_doc = db.collection("users").document(request.elderly_id).get()
+            if elderly_doc.exists:
+                elderly_data = elderly_doc.to_dict()
+                elderly_name = elderly_data.get("name", "Elderly")
+    except Exception as e:
+        logger.warning(f"Failed to fetch elderly info for SOS: {e}")
+    
+    # Create SOS alert
+    alert = _create_alert(
+        alert_type="sos",
+        severity="critical",
+        title="SOS Emergency",
+        description=f"{elderly_name} activated SOS emergency button. {request.message or 'Immediate assistance required.'}",
+        elderly_id=request.elderly_id,
+        elderly_name=elderly_name,
+        detection_data={"location": request.location, "message": request.message}
+    )
+    
     return {
         "status": "sos_triggered",
         "elderly_id": request.elderly_id,
-        "alert_id": f"sos_{random.randint(100, 999)}",
-        "emergency_contacts_notified": 3,
-        "created_at": datetime.now().isoformat()
+        "alert_id": alert["id"],
+        "emergency_contacts_notified": True,
+        "created_at": alert["created_at"]
     }
 
 
 @router.get("/alerts/{guardian_id}")
 async def get_alerts(guardian_id: str, status: Optional[str] = None, limit: int = 20):
-    """Get all alerts for a guardian."""
-    alerts = ALERTS_DB.copy()
+    """Get all alerts - from Firestore if available, otherwise from in-memory store."""
+    alerts = []
     
+    # Try Firestore first
+    try:
+        db = get_db()
+        if db and not is_mock_mode():
+            query = db.collection("alerts").order_by("created_at", direction="DESCENDING").limit(limit)
+            docs = query.get()
+            for doc in docs:
+                alert_data = doc.to_dict()
+                alert_data["id"] = doc.id
+                # Convert Firestore timestamp to string if needed
+                if hasattr(alert_data.get("created_at"), "isoformat"):
+                    alert_data["created_at"] = alert_data["created_at"].isoformat()
+                alerts = [alert_data for alert_data in [doc.to_dict() | {"id": doc.id} for doc in docs]]
+    except Exception as e:
+        logger.warning(f"Firestore alert fetch failed: {e}")
+    
+    # Fallback to in-memory store
+    if not alerts:
+        with _alerts_lock:
+            alerts = _alerts_store.copy()
+    
+    # Filter by status
     if status == "active":
-        alerts = [a for a in alerts if not a["resolved"]]
+        alerts = [a for a in alerts if not a.get("resolved", False)]
     elif status == "resolved":
-        alerts = [a for a in alerts if a["resolved"]]
+        alerts = [a for a in alerts if a.get("resolved", False)]
     
-    active_count = len([a for a in ALERTS_DB if not a["resolved"]])
+    active_count = len([a for a in alerts if not a.get("resolved", False)])
     
     return {
         "guardian_id": guardian_id,
@@ -491,12 +845,86 @@ async def get_alerts(guardian_id: str, status: Optional[str] = None, limit: int 
 
 @router.put("/alerts/{alert_id}/acknowledge")
 async def acknowledge_alert(alert_id: str, request: AlertAcknowledgeRequest):
-    """Acknowledge an alert."""
+    """Acknowledge an alert - update in Firestore and in-memory."""
+    # Update in Firestore
+    try:
+        db = get_db()
+        if db and not is_mock_mode():
+            db.collection("alerts").document(alert_id).update({
+                "acknowledged": True,
+                "resolved": True,
+                "response_action": request.response_action,
+                "notes": request.notes,
+                "acknowledged_at": datetime.now().isoformat(),
+            })
+    except Exception as e:
+        logger.warning(f"Firestore alert update failed: {e}")
+    
+    # Update in-memory
+    with _alerts_lock:
+        for alert in _alerts_store:
+            if alert.get("id") == alert_id:
+                alert["acknowledged"] = True
+                alert["resolved"] = True
+                alert["response_action"] = request.response_action
+                break
+    
     return {
         "alert_id": alert_id,
         "status": "acknowledged",
         "response_action": request.response_action,
         "acknowledged_at": datetime.now().isoformat()
+    }
+
+
+@router.get("/emergency-contacts/{elderly_id}")
+async def get_emergency_contacts(elderly_id: str):
+    """Get emergency contact numbers for an elderly (guardians/caregivers with emergency alerts enabled)."""
+    contacts = []
+    
+    try:
+        db = get_db()
+        if db and not is_mock_mode():
+            # Find active connections for this elderly
+            connections = db.collection("connections").where(
+                "elderly_id", "==", elderly_id
+            ).where("status", "==", "active").get()
+            
+            for conn in connections:
+                conn_data = conn.to_dict()
+                linked_user_id = conn_data.get("linked_user_id", "")
+                if linked_user_id:
+                    # Get user profile
+                    user_doc = db.collection("users").document(linked_user_id).get()
+                    if user_doc.exists:
+                        user_data = user_doc.to_dict()
+                        # Check if they want emergency alerts
+                        receive_fall_alerts = user_data.get("guardianProfile", {}).get("receive_fall_alerts", True)
+                        if not receive_fall_alerts:
+                            receive_fall_alerts = user_data.get("caregiverProfile", {}).get("receive_fall_alerts", True)
+                        
+                        if receive_fall_alerts:
+                            contacts.append({
+                                "name": user_data.get("name", "Unknown"),
+                                "phone": user_data.get("phone", ""),
+                                "email": user_data.get("email", ""),
+                                "role": user_data.get("role", "guardian"),
+                            })
+    except Exception as e:
+        logger.warning(f"Failed to fetch emergency contacts: {e}")
+    
+    # Add 911 as fallback
+    contacts.append({
+        "name": "Emergency Services",
+        "phone": "911",
+        "email": "",
+        "role": "emergency",
+    })
+    
+    return {
+        "elderly_id": elderly_id,
+        "contacts": contacts,
+        "count": len(contacts)
     }
 
 
@@ -735,6 +1163,7 @@ class StreamFrameRequest(BaseModel):
     """Request model for streaming frame analysis."""
     frame_base64: str
     elderly_id: Optional[str] = None
+    elderly_name: Optional[str] = None  # Display name for alerts
     timestamp: Optional[float] = None  # Client-side timestamp
 
 
@@ -787,12 +1216,23 @@ async def stream_analyze_frame(session_id: str, request: StreamFrameRequest):
         processing_time = (time.time() - start_time) * 1000
         
         # Log processing
-        if session.frame_count % 10 == 1 or result.is_fall:  
+        if session.frame_count % 10 == 1 or result.is_fall or result.gait_abnormal:  
             logger.info(f"📊 Frame #{session.frame_count} [{session_id}] "
                         f"S={result.skeleton_score:.2f} M={result.motion_score:.2f} "
-                        f"DL={result.dl_score:.2f} ({processing_time:.0f}ms)")
+                        f"DL={result.dl_score:.2f} act={result.dl_activity} "
+                        f"gait_abnormal={result.gait_abnormal} ({processing_time:.0f}ms)")
         if result.is_fall:
             logger.warning(f"🚨 FALL DETECTED in session {session_id}! Confidence: {result.confidence*100:.1f}%")
+        if result.gait_abnormal:
+            logger.warning(f"🦿 ABNORMAL GAIT in session {session_id}! Activity: {result.dl_activity}")
+        
+        # Auto-create alerts for fall, gait, inactivity
+        _check_and_create_alerts(
+            session_id=session_id,
+            result=result,
+            elderly_id=request.elderly_id,
+            elderly_name=request.elderly_name or request.elderly_id,
+        )
         
         return {
             "success": True,
@@ -812,6 +1252,15 @@ async def stream_analyze_frame(session_id: str, request: StreamFrameRequest):
                 "motion": round(result.motion_score, 3),
                 "deep_learning": round(result.dl_score, 3),
             },
+            "activity": {
+                "dl_activity": result.dl_activity,
+                "gait_abnormal": result.gait_abnormal,
+                "dl_probabilities": {k: round(v, 3) for k, v in result.dl_probabilities.items()} if result.dl_probabilities else None,
+            },
+            "inactivity": {
+                "seconds": round(result.inactivity_seconds, 1),
+                "alert": result.inactivity_alert,
+            },
             "processing_time_ms": round(processing_time, 1),
             "state": {
                 "consecutive_falls": session.detector.state.consecutive_fall_frames,
@@ -826,14 +1275,23 @@ async def stream_analyze_frame(session_id: str, request: StreamFrameRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class StreamStartRequest(BaseModel):
+    """Request model for starting a stream session."""
+    elderly_id: Optional[str] = None
+    elderly_name: Optional[str] = None
+
+
 @router.post("/stream/{session_id}/start")
-async def stream_start_session(session_id: str, elderly_id: Optional[str] = None):
+async def stream_start_session(session_id: str, request: StreamStartRequest = None):
     """
     Start or reset a streaming detection session.
     
     Call this when starting to watch a camera feed.
     Creates a fresh session with empty frame buffer.
     """
+    elderly_id = request.elderly_id if request else None
+    elderly_name = request.elderly_name if request else None
+    
     session = _stream_session_manager.get_or_create_session(session_id, elderly_id)
     session.reset()
     
@@ -842,7 +1300,7 @@ async def stream_start_session(session_id: str, elderly_id: Optional[str] = None
     logger.info(f"🎥 LIVE STREAM SESSION STARTED")
     logger.info(f"{'='*60}")
     logger.info(f"  📹 Session ID: {session_id}")
-    logger.info(f"  👴 Elderly ID: {elderly_id or 'N/A'}")
+    logger.info(f"  👴 Elderly: {elderly_name or elderly_id or 'N/A'}")
     logger.info(f"  🧠 3-Layer Detection: ACTIVE")
     logger.info(f"  📊 Buffer size: 32 frames (sliding window)")
     logger.info(f"  ⚡ DL runs every 16 frames")
@@ -852,6 +1310,7 @@ async def stream_start_session(session_id: str, elderly_id: Optional[str] = None
         "success": True,
         "session_id": session_id,
         "elderly_id": elderly_id,
+        "elderly_name": elderly_name,
         "message": "Stream session started - send frames to /stream/{session_id}/frame",
         "config": {
             "buffer_size": session.detector.BUFFER_SIZE,

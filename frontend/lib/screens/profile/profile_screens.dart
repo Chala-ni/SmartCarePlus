@@ -297,11 +297,21 @@ class _ElderlyProfileScreenState extends ConsumerState<ElderlyProfileScreen> {
   }
   
   Widget _buildDropdown(String label, String value, List<String> items, void Function(String?) onChanged) {
+    // Ensure value exists in items list to avoid assertion error
+    final safeValue = items.contains(value) ? value : items.first;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: DropdownButtonFormField<String>(
-        value: value,
-        items: items.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+        value: safeValue,
+        isExpanded: true,
+        items: items.map((e) => DropdownMenuItem(
+          value: e, 
+          child: Text(
+            e, 
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        )).toList(),
         onChanged: onChanged,
         style: const TextStyle(color: AppColors.textPrimary),
         dropdownColor: AppColors.surface,
@@ -873,11 +883,21 @@ class _CaregiverProfileScreenState extends ConsumerState<CaregiverProfileScreen>
   }
   
   Widget _buildDropdown(String label, String value, List<String> items, void Function(String?) onChanged) {
+    // Ensure value exists in items list to avoid assertion error
+    final safeValue = items.contains(value) ? value : items.first;
     return Padding(
       padding: const EdgeInsets.only(bottom: 12),
       child: DropdownButtonFormField<String>(
-        value: value,
-        items: items.map((e) => DropdownMenuItem(value: e, child: Text(e))).toList(),
+        value: safeValue,
+        isExpanded: true,
+        items: items.map((e) => DropdownMenuItem(
+          value: e, 
+          child: Text(
+            e, 
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        )).toList(),
         onChanged: onChanged,
         style: const TextStyle(color: AppColors.textPrimary),
         dropdownColor: AppColors.surface,

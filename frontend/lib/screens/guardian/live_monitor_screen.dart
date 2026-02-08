@@ -17,6 +17,7 @@ import '../../core/services/api_service.dart';
 import '../../providers/connection_provider.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../widgets/mjpeg_stream.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 /// Available demo video IDs with their scenarios
 /// Training videos for hybrid fall detection testing
@@ -63,6 +64,14 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
   String _detectionSource = '';
   Map<String, double> _layerScores = {};
   String _fallType = 'none';
+  
+  // Activity & gait detection state
+  String _dlActivity = 'unknown';
+  bool _gaitAbnormal = false;
+  double _inactivitySeconds = 0;
+  bool _inactivityAlert = false;
+  bool _gaitAlertShown = false;
+  bool _inactivityAlertShown = false;
   
   // Frame capture state for live streaming detection
   Uint8List? _lastCapturedFrame;
@@ -227,12 +236,41 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
             };
           }
           
+          // Parse activity & gait data
+          final activity = data['activity'] as Map<String, dynamic>?;
+          if (activity != null) {
+            _dlActivity = activity['dl_activity'] ?? 'unknown';
+            _gaitAbnormal = activity['gait_abnormal'] ?? false;
+          }
+          
+          // Parse inactivity data
+          final inactivity = data['inactivity'] as Map<String, dynamic>?;
+          if (inactivity != null) {
+            _inactivitySeconds = (inactivity['seconds'] ?? 0.0).toDouble();
+            _inactivityAlert = inactivity['alert'] ?? false;
+          }
+          
           // Update activity based on detection
           if (_fallDetected) {
             _currentActivity = 'FALL DETECTED';
             _fallRisk = 'Critical';
+          } else if (_gaitAbnormal) {
+            _currentActivity = 'Abnormal Gait';
+            _fallRisk = 'Medium';
+          } else if (_inactivityAlert) {
+            _currentActivity = 'Inactive';
+            _fallRisk = 'Medium';
           } else if (_bufferReady) {
-            _currentActivity = 'Normal';
+            // Map DL activities to user-friendly labels
+            if (_dlActivity == 'good_gait' || _dlActivity == 'adl') {
+              _currentActivity = 'Normal';
+            } else if (_dlActivity == 'tug') {
+              _currentActivity = 'Walking';
+            } else if (_dlActivity == 'arthritis_gait') {
+              _currentActivity = 'Abnormal Gait';
+            } else {
+              _currentActivity = 'Normal';
+            }
             _fallRisk = 'Low';
           } else {
             _currentActivity = 'Buffering...';
@@ -243,6 +281,18 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
         // Show alert if fall detected
         if (_fallDetected && mounted) {
           _showFallAlert();
+        }
+        
+        // Show gait alert (once per session)
+        if (_gaitAbnormal && !_gaitAlertShown && mounted) {
+          _gaitAlertShown = true;
+          _showGaitAlert();
+        }
+        
+        // Show inactivity alert (once per session)
+        if (_inactivityAlert && !_inactivityAlertShown && mounted) {
+          _inactivityAlertShown = true;
+          _showInactivityAlert();
         }
       }
     } catch (e) {
@@ -302,10 +352,207 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
           ElevatedButton(
             onPressed: () {
               Navigator.pop(context);
-              // TODO: Trigger emergency call
+              _showEmergencyContacts();
             },
             style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonRed),
             child: const Text('Call Emergency'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  /// Show emergency contacts dialog with call options
+  Future<void> _showEmergencyContacts() async {
+    if (_selectedElderly == null) return;
+    
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/emergency-contacts/${_selectedElderly!.id}',
+        requireAuth: false,
+      );
+      
+      if (!response.success || response.data == null) {
+        // Fallback to 911
+        final Uri phoneUri = Uri(scheme: 'tel', path: '911');
+        if (await canLaunchUrl(phoneUri)) {
+          await launchUrl(phoneUri);
+        }
+        return;
+      }
+      
+      final contacts = (response.data!['contacts'] as List?) ?? [];
+      
+      if (!mounted) return;
+      
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: AppColors.surface,
+          title: const Row(
+            children: [
+              Icon(Icons.phone, color: AppColors.neonCyan),
+              SizedBox(width: 12),
+              Text('Emergency Contacts', style: TextStyle(color: AppColors.textPrimary)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: contacts.map<Widget>((contact) {
+              final name = contact['name'] ?? 'Unknown';
+              final phone = contact['phone'] ?? '';
+              final role = contact['role'] ?? '';
+              final isEmergency = role == 'emergency';
+              
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: GlassmorphicCard(
+                  padding: const EdgeInsets.all(12),
+                  child: ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: isEmergency ? AppColors.neonRed.withOpacity(0.2) : AppColors.neonCyan.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        isEmergency ? Icons.local_hospital : Icons.person,
+                        color: isEmergency ? AppColors.neonRed : AppColors.neonCyan,
+                        size: 20,
+                      ),
+                    ),
+                    title: Text(name, style: const TextStyle(color: AppColors.textPrimary, fontSize: 14)),
+                    subtitle: Text(phone, style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.phone, color: AppColors.neonGreen),
+                      onPressed: () async {
+                        Navigator.pop(context);
+                        final Uri phoneUri = Uri(scheme: 'tel', path: phone);
+                        if (await canLaunchUrl(phoneUri)) {
+                          await launchUrl(phoneUri);
+                        }
+                      },
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel', style: TextStyle(color: AppColors.textSecondary)),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      debugPrint('Error fetching emergency contacts: $e');
+      final Uri phoneUri = Uri(scheme: 'tel', path: '911');
+      if (await canLaunchUrl(phoneUri)) {
+        await launchUrl(phoneUri);
+      }
+    }
+  }
+  
+  /// Show gait abnormality alert
+  void _showGaitAlert() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.neonOrange.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.directions_walk, color: AppColors.neonOrange),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text('Abnormal Gait Detected', style: TextStyle(color: AppColors.neonOrange, fontSize: 18)),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${_selectedElderly?.name ?? "Elderly"} is showing signs of arthritic or abnormal gait pattern.',
+              style: const TextStyle(color: AppColors.textPrimary),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Text(
+                'This may indicate joint pain, arthritis, or mobility issues. Consider scheduling a medical check-up.',
+                style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Dismiss', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonOrange),
+            child: const Text('Acknowledge'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  /// Show inactivity alert
+  void _showInactivityAlert() {
+    final minutes = (_inactivitySeconds / 60).round();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.neonOrange.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.timer_off, color: AppColors.neonOrange),
+            ),
+            const SizedBox(width: 12),
+            const Expanded(
+              child: Text('Inactivity Alert', style: TextStyle(color: AppColors.neonOrange, fontSize: 18)),
+            ),
+          ],
+        ),
+        content: Text(
+          '${_selectedElderly?.name ?? "Elderly"} has been inactive for approximately $minutes minutes. Please check on them.',
+          style: const TextStyle(color: AppColors.textPrimary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Dismiss', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context),
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonOrange),
+            child: const Text('Acknowledge'),
           ),
         ],
       ),
@@ -323,7 +570,7 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Fall Type: $_fallType', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+          Text('Confidence: $_currentConfidence', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
           Text('Detection Source: $_detectionSource', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
           const SizedBox(height: 8),
           const Text('Layer Scores:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.bold)),
@@ -832,6 +1079,88 @@ class _LiveMonitorScreenState extends ConsumerState<LiveMonitorScreen> {
                   _buildLayerScoreRow('Skeleton (Pose)', _layerScores['skeleton'] ?? 0, AppColors.neonCyan),
                   _buildLayerScoreRow('Motion (Frame)', _layerScores['motion'] ?? 0, AppColors.neonGreen),
                   _buildLayerScoreRow('Deep Learning', _layerScores['deep_learning'] ?? 0, AppColors.neonPurple),
+                ],
+              ),
+            ),
+          ],
+          
+          // Gait & Activity analysis card
+          if (_dlActivity != 'unknown' && _isStreaming) ...[
+            const SizedBox(height: 8),
+            GlassmorphicCard(
+              glowColor: _gaitAbnormal ? AppColors.neonOrange : null,
+              glowIntensity: _gaitAbnormal ? 0.2 : 0,
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        _gaitAbnormal ? Icons.warning_amber : Icons.directions_walk,
+                        size: 14,
+                        color: _gaitAbnormal ? AppColors.neonOrange : AppColors.neonCyan,
+                      ),
+                      const SizedBox(width: 6),
+                      const Text(
+                        'Activity & Gait Analysis',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const SizedBox(width: 80, child: Text('Activity:', style: TextStyle(fontSize: 10, color: AppColors.textSecondary))),
+                      Text(
+                        _dlActivity.replaceAll('_', ' ').toUpperCase(),
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: _dlActivity == 'fall' ? AppColors.neonRed
+                              : _dlActivity == 'arthritis_gait' ? AppColors.neonOrange
+                              : AppColors.neonGreen,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const SizedBox(width: 80, child: Text('Gait:', style: TextStyle(fontSize: 10, color: AppColors.textSecondary))),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _gaitAbnormal ? AppColors.neonOrange.withOpacity(0.2) : AppColors.neonGreen.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          _gaitAbnormal ? 'ABNORMAL' : 'NORMAL',
+                          style: TextStyle(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: _gaitAbnormal ? AppColors.neonOrange : AppColors.neonGreen,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_inactivitySeconds > 30) ...[
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        const SizedBox(width: 80, child: Text('Inactivity:', style: TextStyle(fontSize: 10, color: AppColors.textSecondary))),
+                        Text(
+                          '${(_inactivitySeconds / 60).toStringAsFixed(1)} min',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: _inactivityAlert ? AppColors.neonOrange : AppColors.textSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
                 ],
               ),
             ),

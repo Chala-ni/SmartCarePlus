@@ -5,8 +5,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:convert';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
+import '../../core/services/api_service.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
@@ -968,8 +972,17 @@ class _MyPhysioTab extends StatelessWidget {
               children: [
                 Expanded(
                   child: _buildPhysioAction(
-                    icon: Icons.videocam,
-                    label: 'Start\nGait Analysis',
+                    icon: Icons.bar_chart,
+                    label: 'View\nProgress',
+                    color: AppColors.neonPurple,
+                    onTap: () {},
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildPhysioAction(
+                    icon: Icons.fitness_center,
+                    label: 'Start\nExercise',
                     color: AppColors.neonCyan,
                     onTap: () {},
                   ),
@@ -977,18 +990,9 @@ class _MyPhysioTab extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildPhysioAction(
-                    icon: Icons.timer,
-                    label: 'TUG\nTest',
+                    icon: Icons.history,
+                    label: 'Activity\nHistory',
                     color: AppColors.neonGreen,
-                    onTap: () {},
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildPhysioAction(
-                    icon: Icons.bar_chart,
-                    label: 'View\nProgress',
-                    color: AppColors.neonPurple,
                     onTap: () {},
                   ),
                 ),
@@ -1858,8 +1862,137 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
 
 // ============= SOS Tab =============
 
-class _SOSTab extends StatelessWidget {
+class _SOSTab extends ConsumerStatefulWidget {
   const _SOSTab();
+  
+  @override
+  ConsumerState<_SOSTab> createState() => _SOSTabState();
+}
+
+class _SOSTabState extends ConsumerState<_SOSTab> {
+  List<Map<String, dynamic>> _emergencyContacts = [];
+  bool _isLoading = false;
+  bool _isTriggeringSOS = false;
+  
+  @override
+  void initState() {
+    super.initState();
+    _fetchEmergencyContacts();
+  }
+  
+  Future<void> _fetchEmergencyContacts() async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+    try {
+      final profile = ref.read(userProfileProvider);
+      if (profile?.uid == null) {
+        if (mounted) setState(() => _isLoading = false);
+        return;
+      }
+      
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/emergency-contacts/${profile!.uid}',
+        requireAuth: false,
+      );
+      
+      if (response.success && response.data != null) {
+        if (mounted) {
+          setState(() {
+            _emergencyContacts = List<Map<String, dynamic>>.from(response.data!['contacts'] ?? []);
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      debugPrint('Error fetching emergency contacts: $e');
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+  
+  Future<void> _triggerSOS() async {
+    setState(() => _isTriggeringSOS = true);
+    try {
+      final profile = ref.read(userProfileProvider);
+      if (profile?.uid == null) return;
+      
+      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
+      final response = await http.post(
+        Uri.parse('$baseUrl/guardian/sos'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'elderly_id': profile!.uid,
+          'message': 'Emergency SOS button activated',
+        }),
+      );
+      
+      if (response.statusCode == 200 && mounted) {
+        _showSOSConfirmation();
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to send SOS. Try calling emergency contacts directly.')),
+        );
+      }
+    } catch (e) {
+      debugPrint('Error triggering SOS: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Failed to send SOS. Check your connection.')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isTriggeringSOS = false);
+    }
+  }
+  
+  void _showSOSConfirmation() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.check_circle, color: AppColors.neonGreen),
+            SizedBox(width: 8),
+            Text('SOS Sent', style: TextStyle(color: AppColors.textPrimary)),
+          ],
+        ),
+        content: const Text(
+          'Emergency alert has been sent to your guardians and caregivers. They will contact you shortly.',
+          style: TextStyle(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('OK', style: TextStyle(color: AppColors.neonCyan)),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Future<void> _callContact(String? phone, String? name) async {
+    if (phone == null || phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('No phone number for $name')),
+      );
+      return;
+    }
+    
+    final uri = Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[^\d+]'), ''));
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Cannot call $phone')),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1872,36 +2005,45 @@ class _SOSTab extends StatelessWidget {
             
             // SOS Button
             GestureDetector(
-              onLongPress: () {
-                // Trigger SOS
-                _showSOSDialog(context);
-              },
+              onLongPress: _isTriggeringSOS ? null : _triggerSOS,
               child: Container(
                 width: 200,
                 height: 200,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: AppColors.neonRed.withOpacity(0.15),
-                  border: Border.all(color: AppColors.neonRed, width: 4),
+                  color: _isTriggeringSOS 
+                      ? AppColors.neonOrange.withOpacity(0.15)
+                      : AppColors.neonRed.withOpacity(0.15),
+                  border: Border.all(
+                    color: _isTriggeringSOS ? AppColors.neonOrange : AppColors.neonRed, 
+                    width: 4,
+                  ),
                   boxShadow: [
                     BoxShadow(
-                      color: AppColors.neonRed.withOpacity(0.3),
+                      color: (_isTriggeringSOS ? AppColors.neonOrange : AppColors.neonRed).withOpacity(0.3),
                       blurRadius: 30,
                       spreadRadius: 5,
                     ),
                   ],
                 ),
-                child: const Column(
+                child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.sos, color: AppColors.neonRed, size: 64),
-                    SizedBox(height: 8),
+                    if (_isTriggeringSOS)
+                      const SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: CircularProgressIndicator(color: AppColors.neonOrange, strokeWidth: 3),
+                      )
+                    else
+                      const Icon(Icons.sos, color: AppColors.neonRed, size: 64),
+                    const SizedBox(height: 8),
                     Text(
-                      'SOS',
+                      _isTriggeringSOS ? 'Sending...' : 'SOS',
                       style: TextStyle(
                         fontSize: 32,
                         fontWeight: FontWeight.bold,
-                        color: AppColors.neonRed,
+                        color: _isTriggeringSOS ? AppColors.neonOrange : AppColors.neonRed,
                       ),
                     ),
                   ],
@@ -1911,11 +2053,11 @@ class _SOSTab extends StatelessWidget {
             
             const SizedBox(height: 24),
             
-            const Text(
-              'Hold for 3 seconds to trigger emergency',
+            Text(
+              _isTriggeringSOS ? 'Sending emergency alert...' : 'Hold for 3 seconds to trigger emergency',
               style: TextStyle(
                 fontSize: 14,
-                color: AppColors.textSecondary,
+                color: _isTriggeringSOS ? AppColors.neonOrange : AppColors.textSecondary,
               ),
             ),
             
@@ -1935,11 +2077,56 @@ class _SOSTab extends StatelessWidget {
             ),
             const SizedBox(height: 12),
             
-            _buildContactCard('Dr. Smith', 'Primary Doctor', Icons.medical_services, AppColors.neonCyan),
-            const SizedBox(height: 8),
-            _buildContactCard('John (Guardian)', 'Family', Icons.person, AppColors.neonGreen),
-            const SizedBox(height: 8),
-            _buildContactCard('Emergency Services', '911', Icons.local_hospital, AppColors.neonRed),
+            if (_isLoading)
+              const Center(child: CircularProgressIndicator(color: AppColors.neonCyan))
+            else if (_emergencyContacts.isEmpty)
+              GlassmorphicCard(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: AppColors.textSecondary.withOpacity(0.5)),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'No emergency contacts. Ask your guardian to add contacts.',
+                        style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else
+              ..._emergencyContacts.map((contact) {
+                final name = contact['name'] ?? 'Contact';
+                final relation = contact['relationship'] ?? contact['relation'] ?? 'Emergency';
+                final phone = contact['phone']?.toString() ?? '';
+                
+                IconData icon = Icons.person;
+                Color color = AppColors.neonCyan;
+                
+                if (relation.toLowerCase().contains('doctor')) {
+                  icon = Icons.medical_services;
+                  color = AppColors.neonCyan;
+                } else if (relation.toLowerCase().contains('guardian') || 
+                           relation.toLowerCase().contains('family') ||
+                           relation.toLowerCase().contains('son') ||
+                           relation.toLowerCase().contains('daughter')) {
+                  icon = Icons.person;
+                  color = AppColors.neonGreen;
+                } else if (relation.toLowerCase().contains('911') || 
+                           relation.toLowerCase().contains('emergency')) {
+                  icon = Icons.local_hospital;
+                  color = AppColors.neonRed;
+                }
+                
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _buildContactCard(name, relation, phone, icon, color),
+                );
+              }),
+            
+            // Always show 911
+            _buildContactCard('Emergency Services', '911', '911', Icons.local_hospital, AppColors.neonRed),
             
             const SizedBox(height: 20),
           ],
@@ -1948,34 +2135,7 @@ class _SOSTab extends StatelessWidget {
     );
   }
 
-  void _showSOSDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.warning, color: AppColors.neonRed),
-            SizedBox(width: 8),
-            Text('SOS Triggered', style: TextStyle(color: AppColors.textPrimary)),
-          ],
-        ),
-        content: const Text(
-          'Emergency alert has been sent to your guardians and emergency contacts.',
-          style: TextStyle(color: AppColors.textSecondary),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('OK', style: TextStyle(color: AppColors.neonCyan)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildContactCard(String name, String role, IconData icon, Color color) {
+  Widget _buildContactCard(String name, String role, String phone, IconData icon, Color color) {
     return GlassmorphicCard(
       padding: const EdgeInsets.all(12),
       child: Row(
@@ -2012,7 +2172,7 @@ class _SOSTab extends StatelessWidget {
             ),
           ),
           IconButton(
-            onPressed: () {},
+            onPressed: () => _callContact(phone, name),
             icon: Icon(Icons.phone, color: color),
           ),
         ],

@@ -7,14 +7,22 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'core/config/theme.dart';
 import 'core/config/routes.dart';
+import 'core/services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   // Initialize Firebase
   await Firebase.initializeApp();
+  
+  // Set background message handler (must be set before any other Firebase Messaging calls)
+  FirebaseMessaging.onBackgroundMessage(firebaseMessagingBackgroundHandler);
+  
+  // Initialize notification service
+  await NotificationService().initialize();
   
   // Set system UI overlay style for dark theme
   SystemChrome.setSystemUIOverlayStyle(

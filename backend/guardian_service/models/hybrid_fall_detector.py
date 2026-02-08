@@ -149,6 +149,15 @@ class HybridFallResult:
     # Reasoning
     detection_reason: str = ""
     
+    # DL activity classification (from video classifier)
+    dl_activity: str = "unknown"  # e.g. "fall", "arthritis_gait", "adl", "good_gait"
+    dl_probabilities: Optional[Dict[str, float]] = None  # All class probabilities
+    gait_abnormal: bool = False  # True if arthritis_gait detected
+    
+    # Inactivity tracking
+    inactivity_seconds: float = 0.0  # How long with near-zero motion
+    inactivity_alert: bool = False  # True if prolonged inactivity detected
+    
     def to_dict(self) -> Dict[str, Any]:
         return {
             "is_fall": self.is_fall,
@@ -165,6 +174,11 @@ class HybridFallResult:
             "processing_time_ms": round(self.processing_time_ms, 1),
             "timestamp": self.timestamp,
             "detection_reason": self.detection_reason,
+            "dl_activity": self.dl_activity,
+            "dl_probabilities": {k: round(v, 3) for k, v in self.dl_probabilities.items()} if self.dl_probabilities else None,
+            "gait_abnormal": self.gait_abnormal,
+            "inactivity_seconds": round(self.inactivity_seconds, 1),
+            "inactivity_alert": self.inactivity_alert,
         }
 
 
@@ -733,6 +747,17 @@ class DeepLearningFallDetector:
         except Exception as e:
             logger.error(f"DL analysis failed: {e}")
             return 0.0, {}
+    
+    def analyze_frames_full(self, frames: List[np.ndarray]):
+        """Analyze frames and return full classification result."""
+        self._ensure_loaded()
+        if self._classifier is None:
+            return None
+        try:
+            return self._classifier.classify_frames(frames)
+        except Exception as e:
+            logger.error(f"DL full analysis failed: {e}")
+            return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1114,6 +1139,14 @@ class LiveDetectionState:
     consecutive_fall_frames: int = 0
     last_fall_time: Optional[float] = None
     recovery_frames: int = 0
+    
+    # Inactivity tracking
+    low_motion_start: Optional[float] = None  # When low motion started
+    inactivity_seconds: float = 0.0
+    inactivity_alert_sent: bool = False
+    
+    # Gait tracking (from DL)
+    gait_alert_sent: bool = False
 
 
 class LiveFallDetector:
@@ -1163,7 +1196,14 @@ class LiveFallDetector:
         # Background DL inference state
         self._dl_running = False
         self._last_dl_score = 0.0
+        self._last_dl_activity = "unknown"
+        self._last_dl_probabilities: Dict[str, float] = {}
+        self._last_dl_gait_abnormal = False
         self._dl_lock = threading.Lock()
+        
+        # Inactivity config
+        self.INACTIVITY_THRESHOLD = 120.0  # seconds of low motion to trigger alert
+        self.LOW_MOTION_THRESHOLD = 0.08  # motion score below this = "low motion"
         
         logger.info(f"LiveFallDetector initialized (DL: {enable_dl}, FPS: {target_fps})")
     
@@ -1175,6 +1215,9 @@ class LiveFallDetector:
         self.processing_times.clear()
         self._dl_running = False
         self._last_dl_score = 0.0
+        self._last_dl_activity = "unknown"
+        self._last_dl_probabilities = {}
+        self._last_dl_gait_abnormal = False
         logger.info("LiveFallDetector reset")
     
     def _run_dl_background(self, frames: list):
@@ -1182,11 +1225,25 @@ class LiveFallDetector:
         self._dl_running = True
         try:
             start = time.time()
-            dl_score, _ = self.hybrid_detector.dl_detector.analyze_frames(frames)
+            # Use full classification to get activity + gait info
+            full_result = self.hybrid_detector.dl_detector.analyze_frames_full(frames)
             elapsed = (time.time() - start) * 1000
-            with self._dl_lock:
-                self._last_dl_score = dl_score
-            logger.info(f"🧠 DL inference complete: score={dl_score:.3f} ({elapsed:.0f}ms)")
+            
+            if full_result:
+                dl_score = full_result.all_probabilities.get("fall", 0.0)
+                with self._dl_lock:
+                    self._last_dl_score = dl_score
+                    self._last_dl_activity = full_result.activity.value
+                    self._last_dl_probabilities = full_result.all_probabilities.copy()
+                    self._last_dl_gait_abnormal = full_result.is_gait_abnormal
+                logger.info(f"🧠 DL inference complete: activity={full_result.activity.value} "
+                           f"fall={dl_score:.3f} arthritis={full_result.all_probabilities.get('arthritis_gait', 0):.3f} "
+                           f"gait_abnormal={full_result.is_gait_abnormal} ({elapsed:.0f}ms)")
+            else:
+                dl_score, all_probs = self.hybrid_detector.dl_detector.analyze_frames(frames)
+                with self._dl_lock:
+                    self._last_dl_score = dl_score
+                logger.info(f"🧠 DL inference (fallback): score={dl_score:.3f} ({elapsed:.0f}ms)")
         except Exception as e:
             logger.error(f"DL background inference failed: {e}")
         finally:
@@ -1266,6 +1323,28 @@ class LiveFallDetector:
         processing_time = (time.time() - start_time) * 1000
         self.processing_times.append(processing_time)
         
+        # Get DL activity/gait info (thread-safe read)
+        with self._dl_lock:
+            dl_activity = self._last_dl_activity
+            dl_probabilities = self._last_dl_probabilities.copy() if self._last_dl_probabilities else None
+            gait_abnormal = self._last_dl_gait_abnormal
+        
+        # Inactivity tracking (based on motion score)
+        now = time.time()
+        if motion_score < self.LOW_MOTION_THRESHOLD:
+            if self.state.low_motion_start is None:
+                self.state.low_motion_start = now
+            self.state.inactivity_seconds = now - self.state.low_motion_start
+        else:
+            self.state.low_motion_start = None
+            self.state.inactivity_seconds = 0.0
+        
+        inactivity_alert = (self.state.inactivity_seconds >= self.INACTIVITY_THRESHOLD 
+                           and not self.state.inactivity_alert_sent)
+        if inactivity_alert:
+            self.state.inactivity_alert_sent = True
+            logger.warning(f"⏰ INACTIVITY ALERT: No movement for {self.state.inactivity_seconds:.0f}s")
+        
         result = HybridFallResult(
             is_fall=is_fall,
             confidence=confidence,
@@ -1278,6 +1357,11 @@ class LiveFallDetector:
             motion_metrics=motion_metrics,
             processing_time_ms=processing_time,
             detection_reason=reason,
+            dl_activity=dl_activity,
+            dl_probabilities=dl_probabilities,
+            gait_abnormal=gait_abnormal,
+            inactivity_seconds=self.state.inactivity_seconds,
+            inactivity_alert=inactivity_alert,
         )
         
         self.state.last_result = result
