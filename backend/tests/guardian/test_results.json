@@ -19,7 +19,7 @@
             "good_gait": 0.056771911680698395,
             "tug": 0.046706851571798325
           },
-          "processing_time_ms": 120358.48689079285
+          "processing_time_ms": 165396.7959880829
         },
         {
           "video": "fall-02-cam0_cropped.mp4",
@@ -34,7 +34,7 @@
             "good_gait": 0.08085949718952179,
             "tug": 0.05759701505303383
           },
-          "processing_time_ms": 7885.271310806274
+          "processing_time_ms": 9950.528621673584
         },
         {
           "video": "fall-03-cam0_cropped.mp4",
@@ -49,7 +49,7 @@
             "good_gait": 0.058460600674152374,
             "tug": 0.0514497347176075
           },
-          "processing_time_ms": 7884.99641418457
+          "processing_time_ms": 9980.176210403442
         },
         {
           "video": "fall-04-cam0_cropped.mp4",
@@ -64,7 +64,7 @@
             "good_gait": 0.07094801962375641,
             "tug": 0.055336907505989075
           },
-          "processing_time_ms": 7778.999090194702
+          "processing_time_ms": 9553.478717803955
         },
         {
           "video": "fall-05-cam0_cropped.mp4",
@@ -79,7 +79,7 @@
             "good_gait": 0.051580410450696945,
             "tug": 0.04562859609723091
           },
-          "processing_time_ms": 7831.998586654663
+          "processing_time_ms": 9453.027248382568
         }
       ]
     },
@@ -100,7 +100,7 @@
             "good_gait": 0.2179625928401947,
             "tug": 0.20404648780822754
           },
-          "processing_time_ms": 9222.194194793701
+          "processing_time_ms": 9667.171478271484
         },
         {
           "video": "adl-02-cam0_cropped.mp4",
@@ -115,7 +115,7 @@
             "good_gait": 0.22400306165218353,
             "tug": 0.2087876796722412
           },
-          "processing_time_ms": 9968.99938583374
+          "processing_time_ms": 10085.000991821289
         },
         {
           "video": "adl-03-cam0_cropped.mp4",
@@ -130,7 +130,7 @@
             "good_gait": 0.20923277735710144,
             "tug": 0.22176527976989746
           },
-          "processing_time_ms": 21063.9386177063
+          "processing_time_ms": 9701.258659362793
         },
         {
           "video": "adl-04-cam0_cropped.mp4",
@@ -145,7 +145,7 @@
             "good_gait": 0.2077268660068512,
             "tug": 0.21991658210754395
           },
-          "processing_time_ms": 21739.40134048462
+          "processing_time_ms": 9556.783199310303
         },
         {
           "video": "adl-05-cam0_cropped.mp4",
@@ -160,7 +160,7 @@
             "good_gait": 0.21040832996368408,
             "tug": 0.21779754757881165
           },
-          "processing_time_ms": 21563.002109527588
+          "processing_time_ms": 10029.930353164673
         }
       ]
     },
@@ -181,7 +181,7 @@
             "good_gait": 0.22911255061626434,
             "tug": 0.17390649020671844
           },
-          "processing_time_ms": 9885.998010635376
+          "processing_time_ms": 9370.400428771973
         },
         {
           "video": "good_gait1 - Copy (11) - Copy.mp4",
@@ -196,7 +196,7 @@
             "good_gait": 0.22911255061626434,
             "tug": 0.17390649020671844
           },
-          "processing_time_ms": 10169.00110244751
+          "processing_time_ms": 9169.471502304077
         },
         {
           "video": "good_gait1 - Copy (12) - Copy.mp4",
@@ -211,7 +211,7 @@
             "good_gait": 0.22911255061626434,
             "tug": 0.17390649020671844
           },
-          "processing_time_ms": 9839.529037475586
+          "processing_time_ms": 9208.991527557373
         },
         {
           "video": "good_gait1 - Copy (13) - Copy.mp4",
@@ -226,7 +226,7 @@
             "good_gait": 0.22911255061626434,
             "tug": 0.17390649020671844
           },
-          "processing_time_ms": 10574.002742767334
+          "processing_time_ms": 11134.377479553223
         },
         {
           "video": "good_gait1 - Copy (2).mp4",
@@ -241,7 +241,7 @@
             "good_gait": 0.22911255061626434,
             "tug": 0.17390649020671844
           },
-          "processing_time_ms": 20855.59892654419
+          "processing_time_ms": 22407.76515007019
         }
       ]
     },
@@ -262,7 +262,7 @@
             "good_gait": 0.1759420931339264,
             "tug": 0.2182319164276123
           },
-          "processing_time_ms": 7977.998971939087
+          "processing_time_ms": 17436.00106239319
         },
         {
           "video": "arthritis_gait - Copy (11) - Copy.mp4",
@@ -277,7 +277,7 @@
             "good_gait": 0.1759420931339264,
             "tug": 0.2182319164276123
           },
-          "processing_time_ms": 7623.999834060669
+          "processing_time_ms": 17523.712873458862
         },
         {
           "video": "arthritis_gait - Copy (11).mp4",
@@ -292,7 +292,7 @@
             "good_gait": 0.1759420931339264,
             "tug": 0.2182319164276123
           },
-          "processing_time_ms": 8325.690984725952
+          "processing_time_ms": 10050.823450088501
         },
         {
           "video": "arthritis_gait - Copy (12) - Copy.mp4",
@@ -307,7 +307,7 @@
             "good_gait": 0.1759420931339264,
             "tug": 0.2182319164276123
           },
-          "processing_time_ms": 9138.997554779053
+          "processing_time_ms": 15679.338932037354
         },
         {
           "video": "arthritis_gait - Copy (12).mp4",
@@ -322,7 +322,7 @@
             "good_gait": 0.1759420931339264,
             "tug": 0.2182319164276123
           },
-          "processing_time_ms": 9311.998844146729
+          "processing_time_ms": 17756.072282791138
         }
       ]
     },
@@ -343,7 +343,7 @@
             "good_gait": 0.1771565079689026,
             "tug": 0.24264512956142426
           },
-          "processing_time_ms": 7882.999658584595
+          "processing_time_ms": 21004.43124771118
         },
         {
           "video": "tug_test1 - Copy (2) - Copy.mp4",
@@ -358,7 +358,7 @@
             "good_gait": 0.1771565079689026,
             "tug": 0.24264512956142426
           },
-          "processing_time_ms": 7728.001832962036
+          "processing_time_ms": 14260.683536529541
         },
         {
           "video": "tug_test1 - Copy (2).mp4",
@@ -373,7 +373,7 @@
             "good_gait": 0.1771565079689026,
             "tug": 0.24264512956142426
           },
-          "processing_time_ms": 7749.918699264526
+          "processing_time_ms": 14447.640419006348
         },
         {
           "video": "tug_test1 - Copy (3) - Copy.mp4",
@@ -388,7 +388,7 @@
             "good_gait": 0.1771565079689026,
             "tug": 0.24264512956142426
           },
-          "processing_time_ms": 8640.997886657715
+          "processing_time_ms": 14209.64503288269
         },
         {
           "video": "tug_test1 - Copy (3).mp4",
@@ -403,7 +403,7 @@
             "good_gait": 0.1771565079689026,
             "tug": 0.24264512956142426
           },
-          "processing_time_ms": 8753.000020980835
+          "processing_time_ms": 13637.739896774292
         }
       ]
     }

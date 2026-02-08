@@ -12,26 +12,23 @@ import '../../utils/logger.dart';
 
 /// API configuration
 class ApiConfig {
-  // Platform-specific base URL configuration
+  // All API calls and video streaming use localhost via adb reverse.
   // 
-  // FOR PHYSICAL ANDROID DEVICE WITH USB:
-  // The video player (ExoPlayer) does NOT work with adb reverse.
-  // You MUST use the actual IP address of your laptop.
-  // 
-  // Steps:
-  // 1. Make sure phone and laptop are on same network (or use hotspot)
-  // 2. Find laptop IP: Get-NetIPAddress -AddressFamily IPv4
-  // 3. Update _serverIp below
-  // 4. Run backend with: uvicorn main:app --reload --port 8000 --host 0.0.0.0
+  // Setup (one-time):
+  //   adb reverse tcp:8000 tcp:8000
+  //   uvicorn main:app --reload --port 8000 --host 0.0.0.0
+  //
+  // No IP address needed — adb reverse forwards localhost:8000 on the
+  // phone to localhost:8000 on the laptop. The custom MjpegStream widget
+  // uses Dart's http package (not ExoPlayer), so it works with adb reverse.
   
-  // ⚠️ UPDATE THIS TO YOUR LAPTOP'S IP ADDRESS
-  static const String _serverIp = '10.154.55.250';
-  
+  /// Base URL for all API calls and streaming
   static String get baseUrl {
-    if (Platform.isAndroid) {
-      // Use actual IP for video streaming to work
-      return 'http://$_serverIp:8000';
-    }
+    return 'http://localhost:8000';
+  }
+  
+  /// Base URL for video streaming (same as baseUrl — no IP needed)
+  static String get streamBaseUrl {
     return 'http://localhost:8000';
   }
   

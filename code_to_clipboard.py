@@ -7,7 +7,7 @@ EXCLUDED_DIRS = {
     'node_modules', '.git', '.vscode', '.idea', '__pycache__', 
     'venv', '.venv', 'env', 'build', 'ios', 'android', 'linux', 'macos', 'windows',
     '.dart_tool', '.pytest_cache', 'dist', 'out', 'logs', 'runs',
-    'debug', 'release', 'migrations', '.github'
+    'debug', 'release', 'migrations', '.github','.keras'
 }
 
 # Extensions to skip (Audio, Binaries, Data, Documents)

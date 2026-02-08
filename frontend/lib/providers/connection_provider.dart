@@ -67,17 +67,19 @@ class InviteCodeInfo {
 }
 
 /// Available demo video IDs for simulation
+/// Mixed training videos (fall/adl) for testing hybrid detection
 const List<String> availableDemoVideos = [
-  'walking_normal_1',
-  'walking_normal_2',
-  'walking_slow_1',
-  'sitting_resting_1',
-  'lying_down_1',
-  'standing_idle_1',
-  'gait_normal_1',
-  'gait_abnormal_1',
-  'fall_indoor_1',
-  'fall_outdoor_1',
+  // Training dataset videos - best for hybrid detection testing
+  'fall-01-cam0',  // Fall video from training set
+  'fall-02-cam0',  // Fall video from training set
+  'fall-03-cam0',  // Fall video from training set
+  'fall-04-cam0',  // Fall video from training set
+  'fall-05-cam0',  // Fall video from training set
+  'adl-01-cam0',   // Normal activity
+  'adl-02-cam0',   // Normal activity
+  'adl-03-cam0',   // Normal activity
+  'adl-04-cam0',   // Normal activity
+  'adl-05-cam0',   // Normal activity
 ];
 
 /// Assigns a random demo video to an elderly based on their ID

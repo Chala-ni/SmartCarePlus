@@ -1,0 +1,78 @@
+{
+  "overall": {
+    "accuracy": 0.855,
+    "precision": 0.5797101449275363,
+    "recall": 1.0,
+    "f1_score": 0.7339449541284404,
+    "sensitivity": 1.0,
+    "specificity": 0.81875
+  },
+  "per_category": {
+    "good_gait": {
+      "total": 40,
+      "correct": 20,
+      "accuracy": 0.5,
+      "avg_confidence": 0.5590584298968315,
+      "avg_processing_time": 11.590459251403809
+    },
+    "adl": {
+      "total": 40,
+      "correct": 31,
+      "accuracy": 0.775,
+      "avg_confidence": 0.30889267547598975,
+      "avg_processing_time": 10.540168476104736
+    },
+    "arthritis_gait": {
+      "total": 40,
+      "correct": 40,
+      "accuracy": 1.0,
+      "avg_confidence": 0.2741780183557719,
+      "avg_processing_time": 11.18483121395111
+    },
+    "fall": {
+      "total": 40,
+      "correct": 40,
+      "accuracy": 1.0,
+      "avg_confidence": 0.6627195791153915,
+      "avg_processing_time": 19.25743724703789
+    },
+    "tug": {
+      "total": 40,
+      "correct": 40,
+      "accuracy": 1.0,
+      "avg_confidence": 0.17760821846127509,
+      "avg_processing_time": 12.386864066123962
+    }
+  },
+  "confusion_matrix": [
+    [
+      131,
+      29
+    ],
+    [
+      0,
+      40
+    ]
+  ],
+  "total_videos": 200,
+  "processing_times": {
+    "mean": 12.9919520509243,
+    "std": 22.775489826497214,
+    "min": 8.842941284179688,
+    "max": 333.1166307926178
+  },
+  "layer_scores": {
+    "skeleton": {
+      "mean": 0.11494354346464579,
+      "std": 0.1456470984412753
+    },
+    "motion": {
+      "mean": 0.4209096340454221,
+      "std": 0.27123708478185193
+    },
+    "deep_learning": {
+      "mean": 0.3305744926631451,
+      "std": 0.24169849341160055
+    }
+  }
+}

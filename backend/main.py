@@ -121,6 +121,14 @@ async def lifespan(app: FastAPI):
     media_path = Path(__file__).parent / "media"
     media_path.mkdir(exist_ok=True)
     
+    # Pre-initialize ML models for faster first detection request
+    logger.info("🧠 Pre-initializing ML models in background...")
+    try:
+        from guardian_service.router import initialize_models_async
+        await initialize_models_async()
+    except Exception as e:
+        logger.warning(f"⚠️ ML model pre-init failed (will load on first request): {e}")
+    
     logger.info("✅ SMARTCARE+ API ready!")
     
     yield  # Application runs here
@@ -134,6 +142,13 @@ async def lifespan(app: FastAPI):
     # Shutdown thread pools
     video_worker_pool.shutdown(wait=True)
     ml_worker_pool.shutdown(wait=True)
+    
+    # Shutdown guardian analysis thread pool  
+    try:
+        from guardian_service.router import analysis_thread_pool
+        analysis_thread_pool.shutdown(wait=False)
+    except Exception:
+        pass
     
     logger.info("✅ Shutdown complete")
 

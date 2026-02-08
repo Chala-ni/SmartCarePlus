@@ -1,0 +1,55 @@
+================================================================================
+SMARTCARE+ Fall Detection System - Evaluation Report
+Three-Layer Hybrid Approach (Skeleton + Motion + Deep Learning)
+================================================================================
+
+OVERALL PERFORMANCE METRICS
+----------------------------------------
+Total Videos Tested: 200
+Accuracy:           85.50%
+Precision:          57.97%
+Recall/Sensitivity: 100.00%
+F1-Score:           73.39%
+Specificity:        81.88%
+
+CONFUSION MATRIX
+----------------------------------------
+True Negatives:  131
+False Positives: 29
+False Negatives: 0
+True Positives:  40
+
+PER-CATEGORY PERFORMANCE
+----------------------------------------
+ADL                  Accuracy: 77.50% (31/40 correct)
+                     Avg Confidence: 30.89%
+                     Avg Processing Time: 10.54s
+ARTHRITIS_GAIT       Accuracy: 100.00% (40/40 correct)
+                     Avg Confidence: 27.42%
+                     Avg Processing Time: 11.18s
+FALL                 Accuracy: 100.00% (40/40 correct)
+                     Avg Confidence: 66.27%
+                     Avg Processing Time: 19.26s
+GOOD_GAIT            Accuracy: 50.00% (20/40 correct)
+                     Avg Confidence: 55.91%
+                     Avg Processing Time: 11.59s
+TUG                  Accuracy: 100.00% (40/40 correct)
+                     Avg Confidence: 17.76%
+                     Avg Processing Time: 12.39s
+
+LAYER-WISE AVERAGE SCORES
+----------------------------------------
+SKELETON             Mean: 0.115, Std Dev: 0.146
+MOTION               Mean: 0.421, Std Dev: 0.271
+DEEP_LEARNING        Mean: 0.331, Std Dev: 0.242
+
+PROCESSING TIME STATISTICS
+----------------------------------------
+Mean:    12.99 seconds
+Std Dev: 22.78 seconds
+Min:     8.84 seconds
+Max:     333.12 seconds
+
+================================================================================
+End of Report
+================================================================================

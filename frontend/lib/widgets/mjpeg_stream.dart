@@ -36,6 +36,10 @@ class MjpegStream extends StatefulWidget {
   /// Callback when stream errors
   final void Function(dynamic error)? onError;
   
+  /// Callback when a new frame is received (for frame capture/analysis)
+  /// The frame is provided as JPEG-encoded bytes
+  final void Function(Uint8List frameBytes)? onFrame;
+
   const MjpegStream({
     super.key,
     required this.streamUrl,
@@ -46,6 +50,7 @@ class MjpegStream extends StatefulWidget {
     this.errorBuilder,
     this.onStreamStart,
     this.onError,
+    this.onFrame,
   });
 
   @override
@@ -54,24 +59,24 @@ class MjpegStream extends StatefulWidget {
 
 class _MjpegStreamState extends State<MjpegStream> {
   http.Client? _client;
+  StreamSubscription? _subscription;
   Uint8List? _currentFrame;
   bool _isLoading = true;
   dynamic _error;
   bool _disposed = false;
-  StreamSubscription? _subscription;
   
-  // JPEG markers
+  // JPEG marker bytes
   static const int _jpegStart1 = 0xFF;
   static const int _jpegStart2 = 0xD8;
   static const int _jpegEnd1 = 0xFF;
   static const int _jpegEnd2 = 0xD9;
-  
+
   @override
   void initState() {
     super.initState();
     _startStream();
   }
-  
+
   @override
   void didUpdateWidget(MjpegStream oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -80,7 +85,7 @@ class _MjpegStreamState extends State<MjpegStream> {
       _startStream();
     }
   }
-  
+
   @override
   void dispose() {
     _disposed = true;
@@ -164,10 +169,13 @@ class _MjpegStreamState extends State<MjpegStream> {
               final bytes = buffer.toBytes();
               if (bytes.length >= 2 && bytes[bytes.length - 2] == _jpegEnd1) {
                 // Complete JPEG frame
+                final frameBytes = Uint8List.fromList(bytes);
                 if (mounted && !_disposed) {
                   setState(() {
-                    _currentFrame = Uint8List.fromList(bytes);
+                    _currentFrame = frameBytes;
                   });
+                  // Notify listener of new frame (for capture/analysis)
+                  widget.onFrame?.call(frameBytes);
                 }
                 buffer.clear();
                 inJpeg = false;

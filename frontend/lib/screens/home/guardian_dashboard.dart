@@ -6,6 +6,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
 import '../../core/services/api_service.dart';
@@ -808,30 +810,275 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
   String _confidence = 'N/A';
   String _fallRisk = 'N/A';
   Timer? _timestampTimer;
+  Timer? _analysisTimer;
   String _currentTimestamp = '';
   bool _hasLoadedElderly = false;
   ElderlyInfo? _consumedElderly; // Track consumed elderly to prevent re-consuming
+  String _currentVideoId = '';
+  
+  // Hybrid detection state
+  bool _isAnalyzing = false;
+  bool _fallDetected = false;
+  String _detectionSource = '';
+  Map<String, double> _layerScores = {};
+  String _fallType = 'none';
+  
+  // Frame capture for live streaming detection
+  Uint8List? _lastCapturedFrame;
+  DateTime? _lastFrameSentAt;
+  int _framesSent = 0;
+  int _bufferSize = 0;
+  bool _bufferReady = false;
   
   String _getVideoUrl(String videoId) {
-    return '${ApiConfig.baseUrl}${ApiConfig.guardian}/video/$videoId';
+    return '${ApiConfig.streamBaseUrl}${ApiConfig.guardian}/video/$videoId';
   }
   
-  /// Get activity info based on video ID
-  Map<String, String> _getActivityFromVideo(String videoId) {
-    if (videoId.contains('walking')) {
-      return {'activity': 'Walking', 'confidence': '${85 + videoId.hashCode.abs() % 10}%', 'fallRisk': 'Low'};
-    } else if (videoId.contains('sitting') || videoId.contains('resting')) {
-      return {'activity': 'Resting', 'confidence': '${90 + videoId.hashCode.abs() % 8}%', 'fallRisk': 'Low'};
-    } else if (videoId.contains('standing')) {
-      return {'activity': 'Standing', 'confidence': '${88 + videoId.hashCode.abs() % 9}%', 'fallRisk': 'Low'};
-    } else if (videoId.contains('lying')) {
-      return {'activity': 'Lying Down', 'confidence': '${92 + videoId.hashCode.abs() % 6}%', 'fallRisk': 'Medium'};
-    } else if (videoId.contains('fall')) {
-      return {'activity': 'Alert!', 'confidence': '${95 + videoId.hashCode.abs() % 4}%', 'fallRisk': 'High'};
-    } else if (videoId.contains('gait')) {
-      return {'activity': 'Walking', 'confidence': '${87 + videoId.hashCode.abs() % 10}%', 'fallRisk': videoId.contains('abnormal') ? 'Medium' : 'Low'};
+  /// Handle new frame from MJPEG stream
+  void _onFrameReceived(Uint8List frameBytes) {
+    _lastCapturedFrame = frameBytes;
+  }
+  
+  /// Send a frame to the backend for live detection
+  Future<void> _sendFrameForDetection() async {
+    if (_currentVideoId.isEmpty || _lastCapturedFrame == null) return;
+    
+    // Throttle: send max 1 frame per second
+    final now = DateTime.now();
+    if (_lastFrameSentAt != null && 
+        now.difference(_lastFrameSentAt!).inMilliseconds < 900) {
+      return;
     }
-    return {'activity': 'Active', 'confidence': '85%', 'fallRisk': 'Low'};
+    _lastFrameSentAt = now;
+    
+    setState(() {
+      _isAnalyzing = true;
+    });
+    
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final sessionId = _currentVideoId; // Use video ID as session ID
+      
+      // Encode frame as base64
+      final frameBase64 = base64Encode(_lastCapturedFrame!);
+      
+      // Send to streaming detection endpoint
+      final response = await apiService.post<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/stream/$sessionId/frame',
+        body: {
+          'frame_base64': frameBase64,
+          'elderly_id': _selectedElderly?.id,
+          'timestamp': now.millisecondsSinceEpoch / 1000,
+        },
+        requireAuth: false,
+      ).timeout(const Duration(seconds: 5));
+      
+      if (response.success && response.data != null) {
+        final data = response.data!;
+        
+        final detection = data['detection'] as Map<String, dynamic>?;
+        final scores = data['scores'] as Map<String, dynamic>?;
+        
+        setState(() {
+          _framesSent = data['frame_number'] ?? _framesSent + 1;
+          _bufferSize = data['buffer_size'] ?? 0;
+          _bufferReady = data['buffer_ready'] ?? false;
+          
+          if (detection != null) {
+            _fallDetected = detection['fall_detected'] ?? false;
+            _confidence = '${((detection['confidence'] ?? 0.0) * 100).toInt()}%';
+            _fallType = detection['fall_type'] ?? 'none';
+            _detectionSource = detection['detection_source'] ?? 'none';
+          }
+          
+          if (scores != null) {
+            _layerScores = {
+              'skeleton': (scores['skeleton'] ?? 0.0).toDouble(),
+              'motion': (scores['motion'] ?? 0.0).toDouble(),
+              'deep_learning': (scores['deep_learning'] ?? 0.0).toDouble(),
+            };
+          }
+          
+          // Update activity based on detection
+          if (_fallDetected) {
+            _currentActivity = 'FALL DETECTED';
+            _fallRisk = 'Critical';
+          } else if (_bufferReady) {
+            _currentActivity = 'Normal';
+            _fallRisk = 'Low';
+          } else {
+            _currentActivity = 'Buffering...';
+            _fallRisk = 'Analyzing';
+          }
+        });
+        
+        // Show alert if fall detected
+        if (_fallDetected && mounted) {
+          _showFallAlert();
+        }
+      }
+    } catch (e) {
+      debugPrint('Stream detection error: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAnalyzing = false;
+        });
+      }
+    }
+  }
+  
+  /// Start streaming session and periodic frame sending
+  Future<void> _startAnalysis() async {
+    if (_currentVideoId.isEmpty) return;
+    
+    // Reset state
+    _framesSent = 0;
+    _bufferSize = 0;
+    _bufferReady = false;
+    _lastCapturedFrame = null;
+    _lastFrameSentAt = null;
+    
+    // Start session on backend
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.post<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/stream/$_currentVideoId/start',
+        body: {'elderly_id': _selectedElderly?.id},
+        requireAuth: false,
+      );
+      debugPrint('🎥 Stream session started: $_currentVideoId');
+    } catch (e) {
+      debugPrint('Failed to start stream session: $e');
+    }
+    
+    // Start periodic frame sending (1 fps)
+    _analysisTimer?.cancel();
+    _analysisTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_isStreaming && mounted && _lastCapturedFrame != null) {
+        _sendFrameForDetection();
+      }
+    });
+  }
+  
+  /// Stop analysis and clean up session
+  Future<void> _stopAnalysis() async {
+    _analysisTimer?.cancel();
+    _analysisTimer = null;
+    
+    // Stop session on backend
+    if (_currentVideoId.isNotEmpty) {
+      try {
+        final apiService = ref.read(apiServiceProvider);
+        await apiService.post<Map<String, dynamic>>(
+          '${ApiConfig.guardian}/stream/$_currentVideoId/stop',
+          requireAuth: false,
+        );
+        debugPrint('🛑 Stream session stopped: $_currentVideoId');
+      } catch (e) {
+        debugPrint('Failed to stop stream session: $e');
+      }
+    }
+    
+    // Reset state
+    _lastCapturedFrame = null;
+    _lastFrameSentAt = null;
+  }
+  
+  /// Legacy method for video file-based detection (kept for reference)
+  Future<void> _runHybridDetection() async {
+    // This now delegates to frame-based detection
+    await _sendFrameForDetection();
+  }
+  
+  /// Show fall alert dialog
+  void _showFallAlert() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface,
+        title: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppColors.neonRed.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.warning, color: AppColors.neonRed),
+            ),
+            const SizedBox(width: 12),
+            const Text('Fall Detected!', style: TextStyle(color: AppColors.neonRed)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${_selectedElderly?.name ?? "Elderly"} may have fallen.',
+              style: const TextStyle(color: AppColors.textPrimary),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Fall Type: $_fallType', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  Text('Confidence: $_confidence', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  Text('Detection: $_detectionSource', style: const TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  const SizedBox(height: 8),
+                  const Text('Layer Scores:', style: TextStyle(color: AppColors.textSecondary, fontSize: 12, fontWeight: FontWeight.bold)),
+                  if (_layerScores.isNotEmpty) ...[
+                    _buildScoreBar('Skeleton', _layerScores['skeleton'] ?? 0, AppColors.neonCyan),
+                    _buildScoreBar('Motion', _layerScores['motion'] ?? 0, AppColors.neonGreen),
+                    _buildScoreBar('Deep Learning', _layerScores['deep_learning'] ?? 0, AppColors.neonPurple),
+                  ],
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Dismiss', style: TextStyle(color: AppColors.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonRed),
+            child: const Text('Call Emergency'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildScoreBar(String label, double score, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4),
+      child: Row(
+        children: [
+          SizedBox(width: 90, child: Text(label, style: const TextStyle(fontSize: 10, color: AppColors.textSecondary))),
+          Expanded(
+            child: LinearProgressIndicator(
+              value: score,
+              backgroundColor: AppColors.surface,
+              valueColor: AlwaysStoppedAnimation<Color>(color),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Text('${(score * 100).toInt()}%', style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
   }
 
   @override
@@ -876,13 +1123,13 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
   @override
   void dispose() {
     _timestampTimer?.cancel();
+    _analysisTimer?.cancel();
     super.dispose();
   }
 
   void _startWatching(ElderlyInfo elderly) {
     final videoId = elderly.assignedVideoId;
     final videoUrl = _getVideoUrl(videoId);
-    final activityInfo = _getActivityFromVideo(videoId);
     
     debugPrint('🎬 Guardian Monitor: Starting stream for ${elderly.name}');
     debugPrint('🎬 Video ID: $videoId');
@@ -890,23 +1137,34 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
 
     setState(() {
       _selectedElderly = elderly;
+      _currentVideoId = videoId;
       _streamUrl = videoUrl;
       _isStreaming = true;
       _isLoading = false;
-      _currentActivity = activityInfo['activity']!;
-      _confidence = activityInfo['confidence']!;
-      _fallRisk = activityInfo['fallRisk']!;
+      _currentActivity = 'Analyzing...';
+      _confidence = '...';
+      _fallRisk = '...';
+      _fallDetected = false;
+      _layerScores = {};
     });
+    
+    // Start hybrid ML analysis
+    _startAnalysis();
   }
 
   void _stopWatching() {
+    _stopAnalysis();
     setState(() {
       _isStreaming = false;
       _streamUrl = '';
       _selectedElderly = null;
+      _currentVideoId = '';
       _currentActivity = 'N/A';
       _confidence = 'N/A';
       _fallRisk = 'N/A';
+      _fallDetected = false;
+      _layerScores = {};
+      _detectionSource = '';
     });
   }
   
@@ -990,6 +1248,7 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
                             onError: (error) {
                               debugPrint('❌ Guardian Monitor Error: $error');
                             },
+                            onFrame: _onFrameReceived,
                           )
                         else
                           Center(
@@ -1130,16 +1389,89 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
                 
                 // Activity Overlay Info
                 GlassmorphicCard(
+                  glowColor: _fallDetected ? AppColors.neonRed : null,
+                  glowIntensity: _fallDetected ? 0.3 : 0,
                   padding: const EdgeInsets.all(14),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  child: Column(
                     children: [
-                      _buildOverlayInfo('Activity', _currentActivity, Icons.directions_walk, AppColors.neonCyan),
-                      _buildOverlayInfo('Confidence', _confidence, Icons.verified, AppColors.neonGreen),
-                      _buildOverlayInfo('Fall Risk', _fallRisk, Icons.warning, AppColors.neonOrange),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        children: [
+                          _buildOverlayInfo(
+                            'Activity', 
+                            _currentActivity, 
+                            _fallDetected ? Icons.warning : Icons.directions_walk, 
+                            _fallDetected ? AppColors.neonRed : AppColors.neonCyan,
+                          ),
+                          _buildOverlayInfo('Confidence', _confidence, Icons.verified, AppColors.neonGreen),
+                          _buildOverlayInfo(
+                            'Fall Risk', 
+                            _fallRisk, 
+                            Icons.health_and_safety, 
+                            _fallRisk == 'Critical' ? AppColors.neonRed 
+                                : _fallRisk == 'Medium' ? AppColors.neonOrange 
+                                : AppColors.neonGreen,
+                          ),
+                        ],
+                      ),
+                      // Analyzing indicator
+                      if (_isAnalyzing) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const SizedBox(
+                              width: 12, height: 12,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: AppColors.neonPurple),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text('Analyzing with hybrid model...', style: TextStyle(fontSize: 10, color: AppColors.neonPurple)),
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
+                
+                // Layer scores (show when available)
+                if (_layerScores.isNotEmpty && _isStreaming) ...[
+                  const SizedBox(height: 8),
+                  GlassmorphicCard(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.psychology, size: 14, color: AppColors.neonPurple),
+                            const SizedBox(width: 6),
+                            const Text(
+                              '3-Layer Hybrid Detection',
+                              style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                            ),
+                            const Spacer(),
+                            if (_detectionSource.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                decoration: BoxDecoration(
+                                  color: AppColors.neonPurple.withOpacity(0.2),
+                                  borderRadius: BorderRadius.circular(4),
+                                ),
+                                child: Text(
+                                  _detectionSource,
+                                  style: const TextStyle(fontSize: 9, color: AppColors.neonPurple),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        _buildLayerScoreRow('Skeleton (Pose)', _layerScores['skeleton'] ?? 0, AppColors.neonCyan),
+                        _buildLayerScoreRow('Motion (Frame)', _layerScores['motion'] ?? 0, AppColors.neonGreen),
+                        _buildLayerScoreRow('Deep Learning', _layerScores['deep_learning'] ?? 0, AppColors.neonPurple),
+                      ],
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1221,6 +1553,40 @@ class _MonitorTabState extends ConsumerState<_MonitorTab> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _buildLayerScoreRow(String label, double score, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(label, style: const TextStyle(fontSize: 10, color: AppColors.textSecondary)),
+          ),
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(2),
+              child: LinearProgressIndicator(
+                value: score,
+                minHeight: 6,
+                backgroundColor: AppColors.surface,
+                valueColor: AlwaysStoppedAnimation<Color>(color.withOpacity(0.8)),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 35,
+            child: Text(
+              '${(score * 100).toInt()}%',
+              style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold),
+              textAlign: TextAlign.right,
+            ),
+          ),
+        ],
+      ),
     );
   }
 

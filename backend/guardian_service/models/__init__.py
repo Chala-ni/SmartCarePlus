@@ -2,6 +2,7 @@
 SMARTCARE+ Guardian Service Models
 
 Fall detection, gait analysis, TUG test, and activity monitoring.
+Includes hybrid 3-layer fall detection system.
 """
 
 from .gait_analyzer import (
@@ -32,6 +33,22 @@ from .video_classifier import (
     get_video_classifier
 )
 
+from .hybrid_fall_detector import (
+    HybridFallDetector,
+    HybridFallResult,
+    SkeletonFallDetector,
+    MotionFallDetector,
+    DeepLearningFallDetector,
+    LiveFallDetector,
+    LiveDetectionState,
+    FallType,
+    DetectionSource,
+    SkeletonMetrics,
+    MotionMetrics,
+    get_hybrid_fall_detector,
+    get_live_fall_detector,
+)
+
 __all__ = [
     # Gait Analyzer
     "GaitAnalyzer",
@@ -55,4 +72,18 @@ __all__ = [
     "VideoClassificationResult",
     "VideoActivityType",
     "get_video_classifier",
+    # Hybrid Fall Detector (3-Layer Ensemble)
+    "HybridFallDetector",
+    "HybridFallResult",
+    "SkeletonFallDetector",
+    "MotionFallDetector",
+    "DeepLearningFallDetector",
+    "LiveFallDetector",
+    "LiveDetectionState",
+    "FallType",
+    "DetectionSource",
+    "SkeletonMetrics",
+    "MotionMetrics",
+    "get_hybrid_fall_detector",
+    "get_live_fall_detector",
 ]
