@@ -209,11 +209,12 @@ class SkeletonFallDetector:
     LEFT_EAR = 7
     RIGHT_EAR = 8
     
-    # Thresholds for fall detection (calibrated for typical video)
-    VELOCITY_THRESHOLD = 0.15  # Normalized units per frame (head moving down fast)
-    HEIGHT_RATIO_THRESHOLD = 0.6  # Height/width ratio below this = horizontal
-    SPINE_ANGLE_THRESHOLD = 45  # Degrees from horizontal (below = lying)
-    COM_VELOCITY_THRESHOLD = 0.1  # Center of mass moving fast
+    # Thresholds for fall detection (calibrated for webcam/live video)
+    # Lowered thresholds for better sensitivity in live detection
+    VELOCITY_THRESHOLD = 0.08  # Normalized units per frame (head moving down fast) - lowered from 0.15
+    HEIGHT_RATIO_THRESHOLD = 0.8  # Height/width ratio below this = horizontal - raised from 0.6
+    SPINE_ANGLE_THRESHOLD = 55  # Degrees from horizontal (below = lying) - raised from 45
+    COM_VELOCITY_THRESHOLD = 0.05  # Center of mass moving fast - lowered from 0.1
     
     def __init__(self, history_size: int = 30):
         """
@@ -251,7 +252,8 @@ class SkeletonFallDetector:
     def _get_landmark_point(self, landmarks: Dict[int, Dict], idx: int) -> Optional[Tuple[float, float]]:
         """Extract (x, y) from landmark if visible."""
         lm = landmarks.get(idx)
-        if lm and lm.get("visibility", 0) > 0.3:
+        # Lowered visibility threshold from 0.3 to 0.1 for better detection in poor lighting
+        if lm and lm.get("visibility", 0) > 0.1:
             return (lm.get("x", 0), lm.get("y", 0))
         return None
     
@@ -376,6 +378,23 @@ class SkeletonFallDetector:
         left_ankle = self._get_landmark_point(landmarks, self.LEFT_ANKLE)
         right_ankle = self._get_landmark_point(landmarks, self.RIGHT_ANKLE)
         
+        # Debug: Log visibility of key landmarks (every ~30 frames to avoid spam)
+        frame_count = len(self.head_history) + 1
+        if frame_count % 30 == 1:
+            key_lm_vis = {
+                "nose": landmarks.get(self.NOSE, {}).get("visibility", 0),
+                "l_hip": landmarks.get(self.LEFT_HIP, {}).get("visibility", 0),
+                "r_hip": landmarks.get(self.RIGHT_HIP, {}).get("visibility", 0),
+                "l_ankle": landmarks.get(self.LEFT_ANKLE, {}).get("visibility", 0),
+                "r_ankle": landmarks.get(self.RIGHT_ANKLE, {}).get("visibility", 0),
+            }
+            vis_str = ", ".join([f"{k}={v:.2f}" for k, v in key_lm_vis.items()])
+            missing = [name for name, pt in [("head", head), ("hips", left_hip and right_hip), 
+                       ("ankles", left_ankle and right_ankle)] if not pt]
+            logger.debug(f"  👁️ Landmark visibility: {vis_str}. History: head={len(self.head_history)}")
+            if missing:
+                logger.debug(f"  ⚠️ Missing landmarks (vis<0.1): {', '.join(missing)}")
+        
         # Update history
         if head:
             self.head_history.append(head)
@@ -418,29 +437,47 @@ class SkeletonFallDetector:
             support_base_ratio=support_ratio,
         )
         
+        # Debug: Log actual metric values vs thresholds
+        logger.debug(f"  📐 Skeleton metrics: head_vel={head_velocity:.4f} (thresh>{self.VELOCITY_THRESHOLD}), "
+                    f"h/w={height_width_ratio:.2f} (thresh<{self.HEIGHT_RATIO_THRESHOLD}), "
+                    f"spine={spine_angle:.1f}° (thresh<{self.SPINE_ANGLE_THRESHOLD}), "
+                    f"com_vel={com_velocity:.4f} (thresh>{self.COM_VELOCITY_THRESHOLD})")
+        
         # Calculate fall score
         score = 0.0
+        score_components = []
         
         # High downward velocity of head
         if head_velocity > self.VELOCITY_THRESHOLD:
-            score += 0.35 * min(head_velocity / self.VELOCITY_THRESHOLD, 2.0)
+            vel_contrib = 0.35 * min(head_velocity / self.VELOCITY_THRESHOLD, 2.0)
+            score += vel_contrib
+            score_components.append(f"vel={vel_contrib:.2f}")
         
         # Low height/width ratio (person is horizontal)
         if height_width_ratio < self.HEIGHT_RATIO_THRESHOLD:
             ratio_score = 1.0 - (height_width_ratio / self.HEIGHT_RATIO_THRESHOLD)
-            score += 0.30 * ratio_score
+            ratio_contrib = 0.30 * ratio_score
+            score += ratio_contrib
+            score_components.append(f"h/w={ratio_contrib:.2f}")
         
         # Low spine angle (lying down)
         if spine_angle < self.SPINE_ANGLE_THRESHOLD:
             angle_score = 1.0 - (spine_angle / self.SPINE_ANGLE_THRESHOLD)
-            score += 0.25 * angle_score
+            angle_contrib = 0.25 * angle_score
+            score += angle_contrib
+            score_components.append(f"spine={angle_contrib:.2f}")
         
         # Fast center of mass movement
         if com_velocity > self.COM_VELOCITY_THRESHOLD:
-            score += 0.10 * min(com_velocity / self.COM_VELOCITY_THRESHOLD, 2.0)
+            com_contrib = 0.10 * min(com_velocity / self.COM_VELOCITY_THRESHOLD, 2.0)
+            score += com_contrib
+            score_components.append(f"com={com_contrib:.2f}")
         
         score = min(score, 1.0)
         metrics.confidence = score
+        
+        if score > 0:
+            logger.debug(f"  📊 Skeleton score={score:.2f} from: {', '.join(score_components)}")
         
         self.last_timestamp = timestamp
         

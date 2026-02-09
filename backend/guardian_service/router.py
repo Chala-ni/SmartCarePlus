@@ -368,8 +368,10 @@ class FrameAnalysisRequest(BaseModel):
 _alerts_store: List[dict] = []
 _alerts_lock = threading.Lock()
 
-# Track which alerts have been sent per session to avoid duplicates
-_sent_alerts: dict = {}  # session_id -> set of alert types
+# Track alert cooldowns per elderly to avoid spam (but allow alerts for different patients)
+# Structure: {elderly_id: {"fall": timestamp, "gait": timestamp, "inactivity": timestamp}}
+_alert_cooldowns: dict = {}
+ALERT_COOLDOWN_SECONDS = 120  # 2 minutes between alerts of same type for same patient
 
 
 def _create_alert(
@@ -590,18 +592,59 @@ def _send_alert_email(alert: dict):
         logger.warning(f"📧 Failed to send alert email: {e}")
 
 
+def _can_send_alert(elderly_id: str, alert_type: str) -> bool:
+    """
+    Check if we can send an alert for this elderly and alert type.
+    Returns True if:
+    - No previous alert of this type for this elderly, OR
+    - More than ALERT_COOLDOWN_SECONDS have passed since last alert
+    """
+    global _alert_cooldowns
+    
+    if not elderly_id:
+        return True  # Always allow if no elderly_id (shouldn't happen in normal use)
+    
+    if elderly_id not in _alert_cooldowns:
+        return True
+    
+    if alert_type not in _alert_cooldowns[elderly_id]:
+        return True
+    
+    last_alert_time = _alert_cooldowns[elderly_id][alert_type]
+    elapsed = time.time() - last_alert_time
+    
+    if elapsed >= ALERT_COOLDOWN_SECONDS:
+        return True
+    
+    logger.debug(f"⏳ Alert cooldown: {alert_type} for {elderly_id} - {ALERT_COOLDOWN_SECONDS - elapsed:.0f}s remaining")
+    return False
+
+
+def _record_alert_sent(elderly_id: str, alert_type: str):
+    """Record that an alert was sent for cooldown tracking."""
+    global _alert_cooldowns
+    
+    if not elderly_id:
+        return
+    
+    if elderly_id not in _alert_cooldowns:
+        _alert_cooldowns[elderly_id] = {}
+    
+    _alert_cooldowns[elderly_id][alert_type] = time.time()
+    logger.info(f"⏰ Alert cooldown started: {alert_type} for {elderly_id} ({ALERT_COOLDOWN_SECONDS}s)")
+
+
 def _check_and_create_alerts(session_id: str, result, elderly_id: str = None, elderly_name: str = None):
-    """Check detection result and create alerts if needed. Called after each frame."""
-    global _sent_alerts
+    """
+    Check detection result and create alerts if needed. Called after each frame.
     
-    if session_id not in _sent_alerts:
-        _sent_alerts[session_id] = set()
+    Uses per-elderly cooldown (2 minutes) to prevent alert spam while still
+    allowing immediate alerts when switching to monitor a different patient.
+    """
     
-    sent = _sent_alerts[session_id]
-    
-    # Fall alert
-    if result.is_fall and "fall" not in sent:
-        sent.add("fall")
+    # Fall alert - check cooldown per elderly
+    if result.is_fall and _can_send_alert(elderly_id, "fall"):
+        _record_alert_sent(elderly_id, "fall")
         confidence_pct = f"{result.confidence * 100:.0f}%"
         _create_alert(
             alert_type="fall",
@@ -622,9 +665,9 @@ def _check_and_create_alerts(session_id: str, result, elderly_id: str = None, el
             }
         )
     
-    # Gait abnormality alert 
-    if result.gait_abnormal and "gait" not in sent:
-        sent.add("gait")
+    # Gait abnormality alert - check cooldown per elderly
+    if result.gait_abnormal and _can_send_alert(elderly_id, "gait"):
+        _record_alert_sent(elderly_id, "gait")
         arthritis_pct = f"{result.dl_probabilities.get('arthritis_gait', 0) * 100:.0f}%" if result.dl_probabilities else "N/A"
         _create_alert(
             alert_type="gait",
@@ -642,9 +685,9 @@ def _check_and_create_alerts(session_id: str, result, elderly_id: str = None, el
             }
         )
     
-    # Inactivity alert
-    if result.inactivity_alert and "inactivity" not in sent:
-        sent.add("inactivity")
+    # Inactivity alert - check cooldown per elderly
+    if result.inactivity_alert and _can_send_alert(elderly_id, "inactivity"):
+        _record_alert_sent(elderly_id, "inactivity")
         _create_alert(
             alert_type="inactivity",
             severity="warning",
@@ -1944,6 +1987,14 @@ def generate_camera_frames(camera_index: int) -> Generator[bytes, None, None]:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, settings.frame_width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, settings.frame_height)
         cap.set(cv2.CAP_PROP_FPS, settings.fps_limit)
+        
+        # Reduce buffer size to minimize latency
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        # Warmup: discard first few frames to clear stale buffer
+        logger.info(f"📷 Warming up camera (discarding buffered frames)...")
+        for _ in range(5):
+            cap.read()
         
         logger.info(f"📷 Live camera stream started (index: {camera_index})")
         frame_count = 0
