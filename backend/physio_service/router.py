@@ -7,9 +7,13 @@ Uses MediaPipe pose estimation for real-time exercise form feedback.
 """
 
 from fastapi import APIRouter, UploadFile, File, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Generator
 from datetime import datetime
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+import threading
 import random
 import cv2
 import numpy as np
@@ -17,6 +21,25 @@ import base64
 import asyncio
 import tempfile
 import os
+import logging
+import sys
+
+
+def _setup_physio_logger(name: str) -> logging.Logger:
+    """Configure a physio logger at DEBUG level with console output."""
+    _logger = logging.getLogger(name)
+    _logger.setLevel(logging.DEBUG)
+    if not _logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter(
+            fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        _logger.addHandler(handler)
+    return _logger
+
+logger = _setup_physio_logger("smartcare.physio")
 
 from .models import (
     PoseAnalyzer,
@@ -33,6 +56,128 @@ from .models import (
 )
 
 router = APIRouter()
+
+
+# ── Diagnostic endpoint ────────────────────────────────────────────────────────
+@router.get("/diagnostic")
+async def physio_diagnostic():
+    """Check MediaPipe status and pose analyzer health."""
+    from .models.pose_analyzer import MEDIAPIPE_AVAILABLE, MEDIAPIPE_TASKS_AVAILABLE
+    pose_analyzer, _ = get_services()
+    return {
+        "mediapipe_installed": MEDIAPIPE_AVAILABLE,
+        "mediapipe_tasks_available": MEDIAPIPE_TASKS_AVAILABLE,
+        "pose_detector_initialized": pose_analyzer.pose_detector is not None,
+        "using_mock_data": pose_analyzer.using_mock,
+        "status": "REAL pose detection" if not pose_analyzer.using_mock else "⚠️ MOCK data (random)",
+    }
+
+
+# Video configuration for exercise demonstrations
+VIDEO_DIR = Path(__file__).parent.parent / "media" / "simulation_footage" / "physio" / "exercise"
+
+# Map exercise types to video files
+EXERCISE_VIDEOS = {
+    "chair_stand": "ex1.mp4",
+    "heel_toe_walk": "ex2.mp4",
+    "single_leg_stand": "ex4.mp4",
+    "ankle_circles": "ex5.mp4",
+    "wall_pushup": "ex7.mp4",
+    "tandem_stand": "ex8.mp4",
+    "marching": "ex9.mp4",
+    "leg_raise": "ex10.mp4",
+    "arm_raise": "ex11.mp4",
+    "squat": "ex1.mp4",  # Reuse chair stand for now
+}
+
+# Thread pool for video streaming
+_video_thread_pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="physio_video")
+
+
+def _generate_mjpeg_frames(video_path: str, fps: int = 15) -> Generator[bytes, None, None]:
+    """
+    Generate MJPEG frames from a video file.
+    Loops the video for continuous playback.
+    """
+    cap = None
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"[Physio Video] Cannot open: {video_path}")
+            return
+        
+        frame_interval = 1.0 / fps
+        
+        while True:
+            ret, frame = cap.read()
+            
+            if not ret:
+                # Loop video
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = cap.read()
+                if not ret:
+                    break
+            
+            # Resize for efficient streaming
+            frame = cv2.resize(frame, (640, 480))
+            
+            # Encode as JPEG
+            ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ret:
+                continue
+            
+            yield (
+                b'--frame\r\n'
+                b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n'
+            )
+            
+            import time
+            time.sleep(frame_interval)
+            
+    except GeneratorExit:
+        pass
+    except Exception as e:
+        print(f"[Physio Video Error] {e}")
+    finally:
+        if cap is not None:
+            cap.release()
+
+
+async def _async_mjpeg_generator(video_path: str):
+    """Async wrapper for MJPEG generator."""
+    loop = asyncio.get_event_loop()
+    frame_queue = asyncio.Queue(maxsize=5)
+    stop_event = threading.Event()
+    
+    def producer():
+        try:
+            for frame in _generate_mjpeg_frames(video_path):
+                if stop_event.is_set():
+                    break
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        frame_queue.put(frame), loop
+                    ).result(timeout=1.0)
+                except Exception:
+                    break
+        except Exception as e:
+            print(f"[Video Producer Error] {e}")
+        finally:
+            asyncio.run_coroutine_threadsafe(frame_queue.put(None), loop)
+    
+    future = _video_thread_pool.submit(producer)
+    
+    try:
+        while True:
+            frame = await frame_queue.get()
+            if frame is None:
+                break
+            yield frame
+    except asyncio.CancelledError:
+        pass
+    finally:
+        stop_event.set()
+        future.cancel()
 
 
 # Service instances (singleton pattern)
@@ -89,6 +234,85 @@ EXERCISES_DB = [
     {"id": "7", "name": "Marching in Place", "category": "Gait", "duration": "10 min", "difficulty": "Easy", "reps": "100 steps", "description": "March in place lifting knees high", "is_prescribed": True},
     {"id": "8", "name": "Seated Leg Raises", "category": "Strength", "duration": "8 min", "difficulty": "Easy", "reps": "3 sets x 10 each leg", "description": "Lift legs while seated in chair", "is_prescribed": False},
 ]
+
+
+# ============= Exercise Video Endpoints =============
+
+@router.get("/exercise-video/{exercise_type}")
+async def get_exercise_video(exercise_type: str):
+    """
+    Get the demonstration video for an exercise type.
+    Returns an MP4 video file for the frontend to display.
+    """
+    if exercise_type not in EXERCISE_VIDEOS:
+        raise HTTPException(
+            status_code=404, 
+            detail=f"No video for exercise type: {exercise_type}. Available: {list(EXERCISE_VIDEOS.keys())}"
+        )
+    
+    video_file = EXERCISE_VIDEOS[exercise_type]
+    video_path = VIDEO_DIR / video_file
+    
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail=f"Video file not found: {video_file}")
+    
+    return FileResponse(
+        path=str(video_path),
+        media_type="video/mp4",
+        filename=f"{exercise_type}_demo.mp4"
+    )
+
+
+@router.get("/exercise-videos")
+async def list_exercise_videos():
+    """List all available exercise demo videos."""
+    available = {}
+    for ex_type, filename in EXERCISE_VIDEOS.items():
+        video_path = VIDEO_DIR / filename
+        available[ex_type] = {
+            "filename": filename,
+            "exists": video_path.exists(),
+            "url": f"/physio/exercise-video/{ex_type}",
+            "stream_url": f"/physio/exercise-stream/{ex_type}"
+        }
+    return {
+        "video_directory": str(VIDEO_DIR),
+        "exercises": available
+    }
+
+
+@router.get("/exercise-stream/{exercise_type}")
+async def stream_exercise_video(exercise_type: str):
+    """
+    Stream exercise demonstration video as MJPEG.
+    
+    This is for displaying the demo video in the Flutter app using
+    the existing MjpegStream widget (same pattern as guardian CCTV).
+    The video loops continuously for reference during exercise.
+    """
+    if exercise_type not in EXERCISE_VIDEOS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No video for exercise type: {exercise_type}"
+        )
+    
+    video_file = EXERCISE_VIDEOS[exercise_type]
+    video_path = VIDEO_DIR / video_file
+    
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail=f"Video file not found: {video_file}")
+    
+    return StreamingResponse(
+        _async_mjpeg_generator(str(video_path)),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+            "Connection": "keep-alive",
+            "Access-Control-Allow-Origin": "*",
+        }
+    )
 
 
 # ============= REST Endpoints =============
@@ -268,6 +492,105 @@ async def submit_session_feedback(session_id: str, request: SessionFeedbackReque
         "pain_level": request.pain_level,
         "difficulty_rating": request.difficulty_rating
     }
+
+
+# ============= Frame-by-Frame Analysis =============
+
+class FrameRequest(BaseModel):
+    """Request model for frame-by-frame analysis."""
+    frame_base64: str
+
+
+@router.post("/session/{session_id}/frame")
+async def analyze_session_frame(session_id: str, request: FrameRequest):
+    """
+    Analyze a single video frame during exercise session.
+    
+    Expects base64-encoded JPEG image frame.
+    Returns real-time form assessment and rep counting.
+    """
+    pose_analyzer, session_handler = get_services()
+    
+    # Verify session exists and is active
+    session = session_handler.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    # Start session if idle (first frame)
+    if session.state == SessionState.IDLE:
+        session_handler.start_session(session_id)
+    
+    try:
+        # Decode base64 frame
+        frame_data = base64.b64decode(request.frame_base64)
+        nparr = np.frombuffer(frame_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if frame is None:
+            raise HTTPException(status_code=400, detail="Invalid image data")
+        
+        # Convert BGR to RGB for MediaPipe
+        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Detect pose
+        timestamp_ms = int(asyncio.get_event_loop().time() * 1000)
+        pose_result = pose_analyzer.detect_pose(frame_rgb, timestamp_ms)
+        
+        if pose_result is None:
+            logger.debug(f"  ❌ No pose detected in frame for session {session_id}")
+            return {
+                "session_id": session_id,
+                "pose_detected": False,
+                "message": "No pose detected - ensure full body is visible",
+                "state": session.state.value,
+                "current_set": session.current_set,
+                "current_rep": session.current_rep,
+                "target_reps": session.target_reps_per_set,
+                "target_sets": session.target_sets
+            }
+        
+        # Log pose detection details
+        angles = pose_analyzer.get_joint_angles(pose_result)
+        logger.debug(
+            f"  📐 Pose [{session_id}] confidence={pose_result.confidence:.2f} | "
+            f"L_knee={angles.get('left_knee', 0):.1f}° R_knee={angles.get('right_knee', 0):.1f}° | "
+            f"L_hip={angles.get('left_hip', 0):.1f}° R_hip={angles.get('right_hip', 0):.1f}° | "
+            f"L_shoulder={angles.get('left_shoulder', 0):.1f}° R_shoulder={angles.get('right_shoulder', 0):.1f}° | "
+            f"trunk={angles.get('trunk_vertical', 0):.1f}°"
+        )
+        
+        # Process frame through session handler
+        result = session_handler.process_frame(session_id, pose_result)
+        result["pose_detected"] = True
+        result["confidence"] = round(pose_result.confidence * 100, 1)
+        result["target_sets"] = session.target_sets
+        
+        # Check landmark visibility for this exercise
+        is_body_visible, missing_landmarks = pose_analyzer.check_landmark_visibility(
+            pose_result, session.exercise_type
+        )
+        result["body_visible"] = is_body_visible
+        if not is_body_visible:
+            result["message"] = "Show your full body in the camera"
+        
+        # Include joint angles in response for frontend display
+        result["joint_angles"] = {
+            k: round(v, 1) for k, v in angles.items()
+        }
+        
+        # Log rep/form results
+        logger.debug(
+            f"  🏋️ Result [{session_id}] set={result.get('current_set')}/{session.target_sets} "
+            f"rep={result.get('current_rep')}/{session.target_reps_per_set} | "
+            f"score={result.get('form_score', 0):.1f} quality={result.get('form_quality', '?')} | "
+            f"feedback={result.get('feedback', [])}"
+        )
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Frame processing error for session {session_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Frame processing error: {str(e)}")
 
 
 @router.get("/exercises")

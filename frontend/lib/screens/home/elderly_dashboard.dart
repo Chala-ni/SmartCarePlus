@@ -374,10 +374,10 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
                 Expanded(
                   child: _buildQuickAction(
                     context: context,
-                    icon: Icons.videocam,
+                    icon: Icons.fitness_center,
                     label: 'Start Exercise',
                     color: AppColors.neonGreen,
-                    onTap: () => Navigator.pushNamed(context, AppRoutes.gaitAnalysis),
+                    onTap: () => Navigator.pushNamed(context, AppRoutes.exercises),
                   ),
                 ),
                 const SizedBox(width: 12),

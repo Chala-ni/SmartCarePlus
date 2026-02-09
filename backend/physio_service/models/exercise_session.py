@@ -11,6 +11,25 @@ from datetime import datetime
 from enum import Enum
 import time
 import uuid
+import logging
+import sys
+
+
+def _setup_physio_logger(name: str) -> logging.Logger:
+    """Configure a physio logger at DEBUG level with console output."""
+    _logger = logging.getLogger(name)
+    _logger.setLevel(logging.DEBUG)
+    if not _logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter(
+            fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        _logger.addHandler(handler)
+    return _logger
+
+logger = _setup_physio_logger("smartcare.physio.session")
 
 from .pose_analyzer import (
     PoseAnalyzer, 
@@ -185,6 +204,11 @@ class ExerciseSessionHandler:
         
         # Initialize rep counter for this exercise
         self.pose_analyzer.init_rep_counter(exercise_type)
+        
+        logger.info(
+            f"📋 Session {session_id} created: {exercise_type.value} "
+            f"target={target_sets}x{target_reps} for user={user_id}"
+        )
         
         return session
     

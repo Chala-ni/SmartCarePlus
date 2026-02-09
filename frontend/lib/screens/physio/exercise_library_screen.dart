@@ -5,6 +5,7 @@
 
 import 'package:flutter/material.dart';
 import '../../core/constants/colors.dart';
+import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 
 class ExerciseLibraryScreen extends StatefulWidget {
@@ -492,7 +493,17 @@ class _ExerciseLibraryScreenState extends State<ExerciseLibraryScreen> {
               child: ElevatedButton(
                 onPressed: () {
                   Navigator.pop(context);
-                  // TODO: Navigate to exercise session screen
+                  // Navigate to exercise monitor screen
+                  Navigator.pushNamed(
+                    context,
+                    AppRoutes.exerciseMonitor,
+                    arguments: {
+                      'exerciseName': exercise['name'],
+                      'exerciseType': _getExerciseType(exercise['name']),
+                      'targetReps': _parseReps(exercise['reps']),
+                      'targetSets': _parseSets(exercise['reps']),
+                    },
+                  );
                 },
                 style: ElevatedButton.styleFrom(
                   backgroundColor: categoryColor,
@@ -539,5 +550,40 @@ class _ExerciseLibraryScreenState extends State<ExerciseLibraryScreen> {
         ),
       ),
     );
+  }
+
+  /// Convert exercise name to backend exercise type enum
+  String _getExerciseType(String name) {
+    final typeMap = {
+      'Chair Stand': 'chair_stand',
+      'Heel-to-Toe Walk': 'heel_toe_walk',
+      'Single Leg Stand': 'single_leg_stand',
+      'Ankle Circles': 'ankle_circles',
+      'Wall Push-ups': 'wall_pushup',
+      'Tandem Stand': 'tandem_stand',
+      'Marching in Place': 'marching',
+      'Seated Leg Raises': 'leg_raise',
+      'Arm Raises': 'arm_raise',
+      'Squats': 'squat',
+    };
+    return typeMap[name] ?? 'chair_stand';
+  }
+
+  /// Parse reps from string like "3 sets x 10 reps"
+  int _parseReps(String repsString) {
+    final match = RegExp(r'(\d+)\s*reps').firstMatch(repsString);
+    if (match != null) {
+      return int.tryParse(match.group(1) ?? '10') ?? 10;
+    }
+    return 10;
+  }
+
+  /// Parse sets from string like "3 sets x 10 reps"
+  int _parseSets(String repsString) {
+    final match = RegExp(r'(\d+)\s*sets?').firstMatch(repsString);
+    if (match != null) {
+      return int.tryParse(match.group(1) ?? '3') ?? 3;
+    }
+    return 3;
   }
 }

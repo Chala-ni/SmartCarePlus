@@ -11,15 +11,50 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple, Any
 from enum import Enum
 import math
+import logging
+import sys
+
+
+def _setup_physio_logger(name: str) -> logging.Logger:
+    """Configure a physio logger at DEBUG level with console output."""
+    _logger = logging.getLogger(name)
+    _logger.setLevel(logging.DEBUG)
+    if not _logger.handlers:
+        handler = logging.StreamHandler(sys.stdout)
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter(
+            fmt="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        ))
+        _logger.addHandler(handler)
+    return _logger
+
+logger = _setup_physio_logger("smartcare.physio.pose")
+
+# ── MediaPipe imports ──────────────────────────────────────────────────────────
+# MediaPipe 0.10.31+ uses Tasks API only (legacy mp.solutions removed)
+MEDIAPIPE_AVAILABLE = False
+MEDIAPIPE_TASKS_AVAILABLE = False
 
 try:
     import mediapipe as mp
     from mediapipe.tasks import python as mp_python
     from mediapipe.tasks.python import vision
     MEDIAPIPE_AVAILABLE = True
-except ImportError:
-    MEDIAPIPE_AVAILABLE = False
-    print("Warning: MediaPipe not available. Using mock pose data.")
+    MEDIAPIPE_TASKS_AVAILABLE = True
+    logger.info("✅ MediaPipe Tasks API available (v%s)", mp.__version__)
+except ImportError as e:
+    logger.warning("⚠️ MediaPipe not installed: %s. Will use mock pose data.", e)
+
+# Check for legacy solutions API (older mediapipe versions)
+MEDIAPIPE_LEGACY_AVAILABLE = False
+if MEDIAPIPE_AVAILABLE:
+    try:
+        _ = mp.solutions.pose
+        MEDIAPIPE_LEGACY_AVAILABLE = True
+        logger.info("✅ MediaPipe legacy API (mp.solutions.pose) also available")
+    except AttributeError:
+        logger.info("ℹ️ MediaPipe legacy API not available (expected for v0.10+)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -242,44 +277,92 @@ class PoseAnalyzer:
         Initialize pose analyzer.
         
         Args:
-            model_path: Path to MediaPipe pose model (uses default if None)
+            model_path: Path to MediaPipe pose model (.task file). 
+                       If None, auto-discovers pose_landmarker_full.task.
         """
         self.pose_detector = None
         self.rep_counters: Dict[ExerciseType, RepCounter] = {}
         self.pose_history: List[PoseResult] = []
         self.max_history = 30  # For smoothing and velocity calculation
+        self.using_mock = True  # Track whether we're using real or mock data
+        self._use_tasks_api = False  # Which API path is active
+        self._use_legacy_api = False
         
         if MEDIAPIPE_AVAILABLE:
             self._init_mediapipe(model_path)
+        else:
+            logger.warning("🔴 MediaPipe NOT available — all pose detection will use MOCK data")
+    
+    def _find_model_file(self) -> Optional[str]:
+        """Auto-discover the pose landmarker model file."""
+        import os
+        # Check common locations
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        search_paths = [
+            os.path.join(script_dir, "..", "..", "scripts", "pose_landmarker_full.task"),
+            os.path.join(script_dir, "..", "..", "ml_models", "physio", "pose_landmarker_full.task"),
+            os.path.join(script_dir, "..", "..", "ml_models", "pose_landmarker_full.task"),
+        ]
+        for path in search_paths:
+            resolved = os.path.abspath(path)
+            if os.path.exists(resolved):
+                logger.info(f"  📁 Found model file: {resolved}")
+                return resolved
+        return None
     
     def _init_mediapipe(self, model_path: Optional[str] = None):
         """Initialize MediaPipe pose detector."""
-        try:
+        # Strategy 1: Try Tasks API (required for mediapipe 0.10+)
+        if MEDIAPIPE_TASKS_AVAILABLE:
+            if not model_path:
+                model_path = self._find_model_file()
+            
             if model_path:
-                # Use custom model
-                base_options = mp_python.BaseOptions(model_asset_path=model_path)
-                options = vision.PoseLandmarkerOptions(
-                    base_options=base_options,
-                    running_mode=vision.RunningMode.VIDEO,
-                    num_poses=1,
-                    min_pose_detection_confidence=0.5,
-                    min_tracking_confidence=0.5,
-                )
-                self.pose_detector = vision.PoseLandmarker.create_from_options(options)
+                try:
+                    base_options = mp_python.BaseOptions(model_asset_path=model_path)
+                    options = vision.PoseLandmarkerOptions(
+                        base_options=base_options,
+                        running_mode=vision.RunningMode.IMAGE,  # Individual frames from camera
+                        num_poses=1,
+                        min_pose_detection_confidence=0.5,
+                        min_tracking_confidence=0.5,
+                    )
+                    self.pose_detector = vision.PoseLandmarker.create_from_options(options)
+                    self._use_tasks_api = True
+                    self.using_mock = False
+                    logger.info("✅ MediaPipe PoseLandmarker initialized (Tasks API, IMAGE mode)")
+                    return
+                except Exception as e:
+                    logger.error(f"⚠️ Failed to initialize Tasks API: {e}")
             else:
-                # Use MediaPipe legacy API for simplicity
-                self.mp_pose = mp.solutions.pose
-                self.pose_detector = self.mp_pose.Pose(
-                    static_image_mode=False,
-                    model_complexity=1,
-                    enable_segmentation=False,
-                    min_detection_confidence=0.5,
-                    min_tracking_confidence=0.5,
-                )
-            print("✅ MediaPipe pose detector initialized")
-        except Exception as e:
-            print(f"⚠️ Failed to initialize MediaPipe: {e}")
-            self.pose_detector = None
+                logger.warning("⚠️ No .task model file found for Tasks API")
+        
+        # Strategy 2: Try legacy API (mediapipe <0.10)
+        if MEDIAPIPE_LEGACY_AVAILABLE:
+            try:
+                self._init_legacy_pose()
+                return
+            except Exception as e:
+                logger.error(f"⚠️ Failed to initialize legacy API: {e}")
+        
+        # Both failed
+        logger.error("🔴 Could not initialize any MediaPipe API — will use MOCK data")
+        self.pose_detector = None
+        self.using_mock = True
+    
+    def _init_legacy_pose(self):
+        """Initialize MediaPipe legacy Pose API (for older mediapipe versions)."""
+        self.mp_pose = mp.solutions.pose
+        self.pose_detector = self.mp_pose.Pose(
+            static_image_mode=True,  # True for disconnected frames
+            model_complexity=1,
+            enable_segmentation=False,
+            min_detection_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
+        self._use_legacy_api = True
+        self.using_mock = False
+        logger.info("✅ MediaPipe pose detector initialized (legacy API, static_image_mode=True)")
     
     def detect_pose(self, image: np.ndarray, timestamp_ms: float = 0) -> Optional[PoseResult]:
         """
@@ -293,57 +376,151 @@ class PoseAnalyzer:
             PoseResult with landmarks or None if detection failed
         """
         if not MEDIAPIPE_AVAILABLE or self.pose_detector is None:
+            logger.warning("  🔴 MOCK DATA — MediaPipe not available or not initialized")
             return self._generate_mock_pose(timestamp_ms)
         
         try:
-            # Convert to MediaPipe format
-            results = self.pose_detector.process(image)
-            
-            if not results.pose_landmarks:
-                return None
-            
-            # Extract landmarks
-            landmarks = {}
-            for idx, lm in enumerate(results.pose_landmarks.landmark):
-                landmarks[idx] = Landmark(
+            if self._use_tasks_api:
+                return self._detect_pose_tasks_api(image, timestamp_ms)
+            elif self._use_legacy_api:
+                return self._detect_pose_legacy(image, timestamp_ms)
+            else:
+                logger.warning("  🔴 No API path configured, using mock data")
+                return self._generate_mock_pose(timestamp_ms)
+        except Exception as e:
+            logger.error(f"Pose detection error: {e}", exc_info=True)
+            return None
+    
+    def _detect_pose_tasks_api(self, image: np.ndarray, timestamp_ms: float) -> Optional[PoseResult]:
+        """Detect pose using MediaPipe Tasks API (v0.10+)."""
+        logger.debug(f"  🎯 Running Tasks API pose detection on frame {image.shape}")
+        
+        # Convert numpy array to MediaPipe Image
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=image)
+        
+        # Detect poses
+        result = self.pose_detector.detect(mp_image)
+        
+        if not result.pose_landmarks or len(result.pose_landmarks) == 0:
+            logger.debug("  ❌ No pose detected by Tasks API")
+            return None
+        
+        # Extract landmarks from first detected pose
+        pose_lms = result.pose_landmarks[0]  # List of NormalizedLandmark
+        landmarks = {}
+        for idx, lm in enumerate(pose_lms):
+            landmarks[idx] = Landmark(
+                x=lm.x,
+                y=lm.y,
+                z=lm.z,
+                visibility=lm.visibility if hasattr(lm, 'visibility') else lm.presence
+            )
+        
+        # Extract world landmarks if available
+        world_landmarks = None
+        if result.pose_world_landmarks and len(result.pose_world_landmarks) > 0:
+            world_lms = result.pose_world_landmarks[0]
+            world_landmarks = {}
+            for idx, lm in enumerate(world_lms):
+                world_landmarks[idx] = Landmark(
+                    x=lm.x,
+                    y=lm.y,
+                    z=lm.z,
+                    visibility=lm.visibility if hasattr(lm, 'visibility') else lm.presence
+                )
+        
+        # Calculate overall confidence
+        confidence = np.mean([lm.visibility for lm in landmarks.values()])
+        
+        # Log key landmark visibility  
+        nose_vis = landmarks.get(0, Landmark(0,0,0,0)).visibility
+        l_hip_vis = landmarks.get(23, Landmark(0,0,0,0)).visibility
+        r_hip_vis = landmarks.get(24, Landmark(0,0,0,0)).visibility
+        l_knee_vis = landmarks.get(25, Landmark(0,0,0,0)).visibility
+        r_knee_vis = landmarks.get(26, Landmark(0,0,0,0)).visibility
+        logger.debug(
+            f"  👁️ Pose landmarks: nose={nose_vis:.2f} "
+            f"L_hip={l_hip_vis:.2f} R_hip={r_hip_vis:.2f} "
+            f"L_knee={l_knee_vis:.2f} R_knee={r_knee_vis:.2f} "
+            f"conf={confidence:.2f}"
+        )
+        
+        pose_result = PoseResult(
+            landmarks=landmarks,
+            timestamp=timestamp_ms,
+            confidence=confidence,
+            world_landmarks=world_landmarks
+        )
+        
+        # Add to history
+        self.pose_history.append(pose_result)
+        if len(self.pose_history) > self.max_history:
+            self.pose_history.pop(0)
+        
+        return pose_result
+    
+    def _detect_pose_legacy(self, image: np.ndarray, timestamp_ms: float) -> Optional[PoseResult]:
+        """Detect pose using MediaPipe legacy solutions API (pre v0.10)."""
+        logger.debug(f"  🎯 Running legacy API pose detection on frame {image.shape}")
+        
+        # Convert to MediaPipe format
+        results = self.pose_detector.process(image)
+        
+        if not results.pose_landmarks:
+            logger.debug("  ❌ No pose detected by legacy API")
+            return None
+        
+        # Extract landmarks
+        landmarks = {}
+        for idx, lm in enumerate(results.pose_landmarks.landmark):
+            landmarks[idx] = Landmark(
+                x=lm.x,
+                y=lm.y,
+                z=lm.z,
+                visibility=lm.visibility
+            )
+        
+        # Extract world landmarks if available
+        world_landmarks = None
+        if results.pose_world_landmarks:
+            world_landmarks = {}
+            for idx, lm in enumerate(results.pose_world_landmarks.landmark):
+                world_landmarks[idx] = Landmark(
                     x=lm.x,
                     y=lm.y,
                     z=lm.z,
                     visibility=lm.visibility
                 )
-            
-            # Extract world landmarks if available
-            world_landmarks = None
-            if results.pose_world_landmarks:
-                world_landmarks = {}
-                for idx, lm in enumerate(results.pose_world_landmarks.landmark):
-                    world_landmarks[idx] = Landmark(
-                        x=lm.x,
-                        y=lm.y,
-                        z=lm.z,
-                        visibility=lm.visibility
-                    )
-            
-            # Calculate overall confidence
-            confidence = np.mean([lm.visibility for lm in landmarks.values()])
-            
-            result = PoseResult(
-                landmarks=landmarks,
-                timestamp=timestamp_ms,
-                confidence=confidence,
-                world_landmarks=world_landmarks
-            )
-            
-            # Add to history
-            self.pose_history.append(result)
-            if len(self.pose_history) > self.max_history:
-                self.pose_history.pop(0)
-            
-            return result
-            
-        except Exception as e:
-            print(f"Pose detection error: {e}")
-            return None
+        
+        # Calculate overall confidence
+        confidence = np.mean([lm.visibility for lm in landmarks.values()])
+        
+        # Log key landmark visibility
+        nose_vis = landmarks.get(0, Landmark(0,0,0,0)).visibility
+        l_hip_vis = landmarks.get(23, Landmark(0,0,0,0)).visibility
+        r_hip_vis = landmarks.get(24, Landmark(0,0,0,0)).visibility
+        l_knee_vis = landmarks.get(25, Landmark(0,0,0,0)).visibility
+        r_knee_vis = landmarks.get(26, Landmark(0,0,0,0)).visibility
+        logger.debug(
+            f"  👁️ Pose landmarks: nose={nose_vis:.2f} "
+            f"L_hip={l_hip_vis:.2f} R_hip={r_hip_vis:.2f} "
+            f"L_knee={l_knee_vis:.2f} R_knee={r_knee_vis:.2f} "
+            f"conf={confidence:.2f}"
+        )
+        
+        pose_result = PoseResult(
+            landmarks=landmarks,
+            timestamp=timestamp_ms,
+            confidence=confidence,
+            world_landmarks=world_landmarks
+        )
+        
+        # Add to history
+        self.pose_history.append(pose_result)
+        if len(self.pose_history) > self.max_history:
+            self.pose_history.pop(0)
+        
+        return pose_result
     
     def _generate_mock_pose(self, timestamp_ms: float) -> PoseResult:
         """Generate mock pose data for testing without MediaPipe."""
@@ -488,6 +665,75 @@ class PoseAnalyzer:
     # FORM VALIDATION
     # ═══════════════════════════════════════════════════════════════════════════
     
+    # Minimum landmark visibility threshold for reliable angle computation
+    MIN_VISIBILITY = 0.5
+    
+    # Required landmarks per exercise type (must be visible for reliable analysis)
+    REQUIRED_LANDMARKS = {
+        ExerciseType.CHAIR_STAND: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.SQUAT: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.LEG_RAISE: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        ExerciseType.ARM_RAISE: [
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
+            JointType.LEFT_ELBOW, JointType.RIGHT_ELBOW,
+        ],
+        ExerciseType.WALL_PUSHUP: [
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
+            JointType.LEFT_ELBOW, JointType.RIGHT_ELBOW,
+            JointType.LEFT_WRIST, JointType.RIGHT_WRIST,
+        ],
+        ExerciseType.SINGLE_LEG_STAND: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.MARCHING: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        ExerciseType.TANDEM_STAND: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.ANKLE_CIRCLES: [
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+            JointType.LEFT_FOOT_INDEX, JointType.RIGHT_FOOT_INDEX,
+        ],
+    }
+    
+    def check_landmark_visibility(self, pose: PoseResult, exercise: ExerciseType) -> Tuple[bool, List[str]]:
+        """
+        Check if required body landmarks are visible enough for reliable analysis.
+        
+        Returns:
+            (is_visible, list of missing landmark names)
+        """
+        required = self.REQUIRED_LANDMARKS.get(exercise, [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ])
+        
+        missing = []
+        for joint in required:
+            landmark = pose.landmarks.get(joint.value)
+            if not landmark or landmark.visibility < self.MIN_VISIBILITY:
+                vis = landmark.visibility if landmark else 0.0
+                missing.append(f"{joint.name}({vis:.2f})")
+        
+        is_visible = len(missing) == 0
+        return is_visible, missing
+    
     def assess_form(self, pose: PoseResult, exercise: ExerciseType) -> FormAssessment:
         """
         Assess exercise form quality based on joint angles.
@@ -499,6 +745,21 @@ class PoseAnalyzer:
         Returns:
             FormAssessment with quality score and feedback
         """
+        # ── Visibility gate: skip if key landmarks aren't visible ──
+        is_visible, missing = self.check_landmark_visibility(pose, exercise)
+        if not is_visible:
+            logger.debug(
+                f"  ⚠️ Insufficient visibility for {exercise.value}: missing {missing}"
+            )
+            return FormAssessment(
+                exercise_type=exercise,
+                quality=FormQuality.POOR,
+                score=0.0,
+                joint_angles=[],
+                feedback=["Position your full body in camera view"],
+                timestamp=pose.timestamp
+            )
+        
         angles = self.get_joint_angles(pose)
         thresholds = self.EXERCISE_THRESHOLDS.get(exercise, {})
         
@@ -506,42 +767,49 @@ class PoseAnalyzer:
         feedback: List[str] = []
         total_score = 100.0
         
-        # Check each relevant angle for the exercise
-        if exercise == ExerciseType.SQUAT:
-            # Check knee angles
-            for side in ["left", "right"]:
-                knee_angle = angles.get(f"{side}_knee", 180)
-                ja = JointAngle(
-                    name=f"{side}_knee",
-                    angle=knee_angle,
-                    reference_min=70,
-                    reference_max=180
-                )
-                joint_angles.append(ja)
-                
-                if knee_angle < 70:
-                    feedback.append(f"Don't bend {side} knee too deeply")
-                    total_score -= 15
-            
-            # Check back straightness
-            trunk = angles.get("trunk_vertical", 0)
-            if trunk > 30:
-                feedback.append("Keep your back straighter")
-                total_score -= 20
+        # Common measurements
+        avg_knee = (angles.get("left_knee", 180) + angles.get("right_knee", 180)) / 2
+        avg_hip = (angles.get("left_hip", 180) + angles.get("right_hip", 180)) / 2
+        avg_shoulder = (angles.get("left_shoulder", 0) + angles.get("right_shoulder", 0)) / 2
+        avg_elbow = (angles.get("left_elbow", 180) + angles.get("right_elbow", 180)) / 2
+        trunk = angles.get("trunk_vertical", 0)
+        knee_diff = abs(angles.get("left_knee", 0) - angles.get("right_knee", 0))
+        hip_diff = abs(angles.get("left_hip", 0) - angles.get("right_hip", 0))
         
-        elif exercise == ExerciseType.CHAIR_STAND:
-            # Similar checks for chair stand
-            avg_knee = (angles.get("left_knee", 180) + angles.get("right_knee", 180)) / 2
-            ja = JointAngle(
-                name="avg_knee",
-                angle=avg_knee,
-                reference_min=70,
-                reference_max=180
-            )
-            joint_angles.append(ja)
+        # Check each relevant angle for the exercise
+        if exercise in [ExerciseType.SQUAT, ExerciseType.CHAIR_STAND]:
+            # Knee angle assessment
+            joint_angles.append(JointAngle("avg_knee", avg_knee, 70, 180))
             
-            if avg_knee < 80:
-                feedback.append("Don't sit too low")
+            if avg_knee < 60:
+                feedback.append(f"Knees bent too deep ({avg_knee:.0f}°) — risk of strain")
+                total_score -= 25
+            elif avg_knee < 80:
+                feedback.append(f"Knees at {avg_knee:.0f}° — try not to go below 80°")
+                total_score -= 10
+            elif avg_knee > 170:
+                feedback.append(f"Knees at {avg_knee:.0f}° — bend more for full rep")
+                total_score -= 5
+            else:
+                feedback.append(f"Knee angle: {avg_knee:.0f}° ✓")
+            
+            # Hip angle assessment
+            joint_angles.append(JointAngle("avg_hip", avg_hip, 70, 180))
+            if avg_hip < 70:
+                feedback.append(f"Hip angle too tight ({avg_hip:.0f}°) — don't lean too far")
+                total_score -= 15
+            
+            # Back straightness
+            if trunk > 35:
+                feedback.append(f"Back tilted {trunk:.0f}° — keep torso upright")
+                total_score -= 20
+            elif trunk > 20:
+                feedback.append(f"Slight forward lean ({trunk:.0f}°) — engage core")
+                total_score -= 8
+            
+            # Symmetry check
+            if knee_diff > 15:
+                feedback.append(f"Uneven knees (diff {knee_diff:.0f}°) — distribute weight evenly")
                 total_score -= 10
         
         elif exercise == ExerciseType.LEG_RAISE:
@@ -552,9 +820,19 @@ class PoseAnalyzer:
                 joint_angles.append(JointAngle(f"{side}_hip", hip_angle, 90, 180))
                 joint_angles.append(JointAngle(f"{side}_knee", knee_angle, 160, 180))
                 
-                if knee_angle < 150:
-                    feedback.append(f"Keep {side} leg straighter")
-                    total_score -= 10
+                if knee_angle < 140:
+                    feedback.append(f"Straighten {side} leg more ({knee_angle:.0f}° → aim 170°+)")
+                    total_score -= 12
+                elif knee_angle < 160:
+                    feedback.append(f"{side.title()} knee slightly bent ({knee_angle:.0f}°)")
+                    total_score -= 5
+            
+            # Show current hip angles for user awareness
+            feedback.append(f"Hip lift: L={angles.get('left_hip', 0):.0f}° R={angles.get('right_hip', 0):.0f}°")
+            
+            if trunk > 25:
+                feedback.append(f"Keep torso stable (tilting {trunk:.0f}°)")
+                total_score -= 10
         
         elif exercise == ExerciseType.ARM_RAISE:
             for side in ["left", "right"]:
@@ -564,30 +842,114 @@ class PoseAnalyzer:
                 joint_angles.append(JointAngle(f"{side}_shoulder", shoulder_angle, 0, 180))
                 joint_angles.append(JointAngle(f"{side}_elbow", elbow_angle, 160, 180))
                 
-                if elbow_angle < 150:
-                    feedback.append(f"Straighten {side} elbow more")
-                    total_score -= 10
+                if elbow_angle < 140:
+                    feedback.append(f"Straighten {side} elbow ({elbow_angle:.0f}° → aim 170°+)")
+                    total_score -= 12
+                elif elbow_angle < 160:
+                    feedback.append(f"{side.title()} elbow slightly bent ({elbow_angle:.0f}°)")
+                    total_score -= 5
+            
+            # Show shoulder elevation progress
+            feedback.append(f"Shoulder: L={angles.get('left_shoulder', 0):.0f}° R={angles.get('right_shoulder', 0):.0f}°")
+            
+            shoulder_diff = abs(angles.get("left_shoulder", 0) - angles.get("right_shoulder", 0))
+            if shoulder_diff > 20:
+                feedback.append(f"Arms uneven (diff {shoulder_diff:.0f}°) — raise both equally")
+                total_score -= 10
         
         elif exercise == ExerciseType.WALL_PUSHUP:
             for side in ["left", "right"]:
                 elbow_angle = angles.get(f"{side}_elbow", 180)
                 joint_angles.append(JointAngle(f"{side}_elbow", elbow_angle, 70, 180))
+                
+                if elbow_angle < 60:
+                    feedback.append(f"{side.title()} elbow too bent ({elbow_angle:.0f}°) — don't go too deep")
+                    total_score -= 15
+            
+            feedback.append(f"Elbow: L={angles.get('left_elbow', 0):.0f}° R={angles.get('right_elbow', 0):.0f}°")
+            
+            if trunk > 30:
+                feedback.append(f"Body not straight (trunk {trunk:.0f}°) — align head to heels")
+                total_score -= 15
+        
+        elif exercise == ExerciseType.MARCHING:
+            joint_angles.append(JointAngle("avg_hip", avg_hip, 70, 180))
+            
+            # Check knee lift height
+            for side in ["left", "right"]:
+                hip_angle = angles.get(f"{side}_hip", 180)
+                if hip_angle < 90:
+                    feedback.append(f"Great {side} knee lift ({hip_angle:.0f}°)!")
+                elif hip_angle > 150:
+                    feedback.append(f"Lift {side} knee higher ({hip_angle:.0f}° → aim below 110°)")
+                    total_score -= 8
+            
+            if trunk > 20:
+                feedback.append(f"Stand tall — leaning {trunk:.0f}°")
+                total_score -= 10
+        
+        elif exercise == ExerciseType.SINGLE_LEG_STAND:
+            # Balance assessment — check hip alignment and body sway
+            joint_angles.append(JointAngle("hip_alignment", hip_diff, 0, 10))
+            
+            if hip_diff > 15:
+                feedback.append(f"Hips tilting (diff {hip_diff:.0f}°) — keep hips level")
+                total_score -= 15
+            elif hip_diff > 8:
+                feedback.append(f"Slight hip tilt ({hip_diff:.0f}°)")
+                total_score -= 5
+            else:
+                feedback.append(f"Hips level ✓ ({hip_diff:.0f}° diff)")
+            
+            if trunk > 15:
+                feedback.append(f"Body swaying {trunk:.0f}° — focus on a fixed point")
+                total_score -= 10
+        
+        elif exercise == ExerciseType.TANDEM_STAND:
+            if hip_diff > 12:
+                feedback.append(f"Hips uneven ({hip_diff:.0f}°) — balance weight")
+                total_score -= 12
+            if trunk > 15:
+                feedback.append(f"Torso swaying ({trunk:.0f}°) — engage core")
+                total_score -= 10
+            else:
+                feedback.append(f"Good stability (trunk {trunk:.0f}°)")
+        
+        elif exercise == ExerciseType.ANKLE_CIRCLES:
+            # Minimal form checks — just ensure stability
+            if trunk > 20:
+                feedback.append(f"Stay steady — body tilting {trunk:.0f}°")
+                total_score -= 8
+            else:
+                feedback.append("Good stability while circling ✓")
+        
+        else:
+            # Generic assessment for unsupported exercises
+            if trunk > 30:
+                feedback.append(f"Watch posture — trunk at {trunk:.0f}°")
+                total_score -= 15
+            if knee_diff > 20:
+                feedback.append(f"Uneven movement (knee diff {knee_diff:.0f}°)")
+                total_score -= 10
+            feedback.append(f"Knee: {avg_knee:.0f}° | Hip: {avg_hip:.0f}°")
         
         # Determine quality level
         total_score = max(0, min(100, total_score))
         
         if total_score >= 90:
             quality = FormQuality.EXCELLENT
-            if not feedback:
-                feedback.append("Excellent form! Keep it up!")
         elif total_score >= 75:
             quality = FormQuality.GOOD
-            if not feedback:
-                feedback.append("Good form")
         elif total_score >= 50:
             quality = FormQuality.FAIR
         else:
             quality = FormQuality.POOR
+        
+        # Log assessment
+        logger.debug(
+            f"  📋 Form: {exercise.value} score={total_score:.0f} "
+            f"quality={quality.value} feedback={feedback}"
+        )
         
         return FormAssessment(
             exercise_type=exercise,
@@ -630,6 +992,15 @@ class PoseAnalyzer:
             self.init_rep_counter(exercise)
         
         counter = self.rep_counters[exercise]
+        
+        # ── Visibility gate: don't count reps from invisible landmarks ──
+        is_visible, missing = self.check_landmark_visibility(pose, exercise)
+        if not is_visible:
+            logger.debug(
+                f"  ⚠️ Skipping rep count — landmarks not visible: {missing}"
+            )
+            return counter.count, False
+        
         angles = self.get_joint_angles(pose)
         
         # Choose the primary angle to track based on exercise
@@ -644,7 +1015,22 @@ class PoseAnalyzer:
         else:
             primary_angle = 90
         
+        old_state = counter.state
         rep_completed = counter.update(primary_angle)
+        
+        # Log state transitions
+        if old_state != counter.state:
+            logger.debug(
+                f"  🔄 Rep state: {old_state}→{counter.state} | "
+                f"angle={primary_angle:.1f}° (up>{counter.threshold_up} down<{counter.threshold_down}) | "
+                f"count={counter.count}"
+            )
+        
+        if rep_completed:
+            logger.info(
+                f"  ✅ Rep #{counter.count} completed for {exercise.value} | "
+                f"angle={primary_angle:.1f}°"
+            )
         
         return counter.count, rep_completed
     

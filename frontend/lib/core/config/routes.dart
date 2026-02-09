@@ -12,6 +12,7 @@ import '../../screens/physio/gait_analysis_screen.dart';
 import '../../screens/physio/tug_test_screen.dart';
 import '../../screens/physio/exercise_library_screen.dart';
 import '../../screens/physio/exercise_schedule_screen.dart';
+import '../../screens/physio/exercise_monitor_screen.dart';
 import '../../screens/nutrition/nutrition_home_screen.dart';
 import '../../screens/nutrition/food_scanner_screen.dart';
 import '../../screens/nutrition/meal_log_screen.dart';
@@ -40,6 +41,7 @@ class AppRoutes {
   static const String tugTest = '/physio/tug';
   static const String exercises = '/physio/exercises';
   static const String exerciseSchedule = '/physio/schedule';
+  static const String exerciseMonitor = '/physio/exercise-monitor';
   
   // Nutrition routes
   static const String nutritionHome = '/nutrition';
@@ -86,6 +88,17 @@ class AppRoutes {
         return _slideRoute(const ExerciseLibraryScreen(), settings);
       case exerciseSchedule:
         return _slideRoute(const ExerciseScheduleScreen(), settings);
+      case exerciseMonitor:
+        final args = settings.arguments as Map<String, dynamic>?;
+        return _slideRoute(
+          ExerciseMonitorScreen(
+            exerciseName: args?['exerciseName'] ?? 'Exercise',
+            exerciseType: args?['exerciseType'] ?? 'chair_stand',
+            targetReps: args?['targetReps'] ?? 10,
+            targetSets: args?['targetSets'] ?? 3,
+          ),
+          settings,
+        );
       
       // Nutrition routes
       case nutritionHome:
