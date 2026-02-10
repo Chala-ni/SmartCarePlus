@@ -33,6 +33,7 @@ from nutrition_service.router import router as nutrition_router
 from guardian_service.router import router as guardian_router
 from core.users import router as users_router
 from core.connections import router as connections_router
+from core.tasks import router as tasks_router
 
 # Core utilities
 from core.config import settings
@@ -212,6 +213,7 @@ app.include_router(connections_router, prefix="/api/connections", tags=["Connect
 app.include_router(physio_router, prefix="/api/physio", tags=["Physio Service"])
 app.include_router(nutrition_router, prefix="/api/nutrition", tags=["Nutrition Service"])
 app.include_router(guardian_router, prefix="/api/guardian", tags=["Guardian Service"])
+app.include_router(tasks_router, prefix="/api/tasks", tags=["Task Service"])
 
 
 if __name__ == "__main__":

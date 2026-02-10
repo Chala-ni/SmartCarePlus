@@ -83,7 +83,12 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
         child: IndexedStack(
           index: _currentIndex,
           children: [
-            _CaregiverHomeTab(onNavigateToPatients: _navigateToPatients),
+            _CaregiverHomeTab(
+              onNavigateToPatients: _navigateToPatients,
+              onNavigateToTasks: () => setState(() => _currentIndex = 2),
+              onNavigateToAlerts: () => setState(() => _currentIndex = 3),
+              onNavigateToReports: () => setState(() => _currentIndex = 4),
+            ),
             _PatientsTab(
               initialPatient: _selectedPatientForMonitor,
               onPatientConsumed: () => _selectedPatientForMonitor = null,
@@ -220,8 +225,16 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
 
 class _CaregiverHomeTab extends ConsumerStatefulWidget {
   final void Function([ElderlyInfo?]) onNavigateToPatients;
+  final VoidCallback onNavigateToTasks;
+  final VoidCallback onNavigateToAlerts;
+  final VoidCallback onNavigateToReports;
   
-  const _CaregiverHomeTab({required this.onNavigateToPatients});
+  const _CaregiverHomeTab({
+    required this.onNavigateToPatients,
+    required this.onNavigateToTasks,
+    required this.onNavigateToAlerts,
+    required this.onNavigateToReports,
+  });
 
   @override
   ConsumerState<_CaregiverHomeTab> createState() => _CaregiverHomeTabState();
@@ -229,6 +242,7 @@ class _CaregiverHomeTab extends ConsumerStatefulWidget {
 
 class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
   List<Map<String, dynamic>> _recentAlerts = [];
+  List<Map<String, dynamic>> _upcomingTasks = [];
   int _alertCount = 0;
   int _taskCount = 0;
   bool _isLoading = false;
@@ -275,8 +289,21 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
         }
       }
       
-      // TODO: Fetch tasks count when tasks API is implemented
-      if (mounted) setState(() => _taskCount = 0);
+      // Fetch tasks
+      final tasksResponse = await apiService.get<Map<String, dynamic>>(
+        '/api/tasks/list/${profile.uid}?filter=today&include_completed=true',
+        requireAuth: false,
+      );
+      if (tasksResponse.success && tasksResponse.data != null) {
+        if (mounted) {
+          setState(() {
+            _upcomingTasks = List<Map<String, dynamic>>.from(
+              (tasksResponse.data!['tasks'] as List?)?.map((t) => Map<String, dynamic>.from(t as Map)) ?? [],
+            );
+            _taskCount = tasksResponse.data!['pending'] ?? 0;
+          });
+        }
+      }
     } catch (e) {
       debugPrint('Error fetching caregiver data: $e');
     } finally {
@@ -398,49 +425,29 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
                   ),
                 ),
                 TextButton(
-                  onPressed: () {},
+                  onPressed: widget.onNavigateToTasks,
                   child: const Text('View All', style: TextStyle(color: AppColors.neonCyan)),
                 ),
               ],
             ),
             const SizedBox(height: 8),
             
-            // Dynamic tasks based on connected patients
-            ...List.generate(
-              connectionState.myElderly.length.clamp(0, 3),
-              (index) {
-                final elderly = connectionState.myElderly[index];
-                final tasks = [
-                  ('Physio session with ${elderly.name}', '10:00 AM', 'Exercise', Icons.accessibility_new, AppColors.neonGreen),
-                  ('Medication reminder for ${elderly.name}', '11:30 AM', 'Medication', Icons.medication, AppColors.neonPurple),
-                  ('Health check for ${elderly.name}', '2:00 PM', 'Check-up', Icons.health_and_safety, AppColors.neonCyan),
-                ];
-                final task = tasks[index % tasks.length];
-                return Column(
-                  children: [
-                    _buildTaskItem(
-                      task: task.$1,
-                      time: task.$2,
-                      type: task.$3,
-                      icon: task.$4,
-                      color: task.$5,
-                    ),
-                    if (index < connectionState.myElderly.length.clamp(0, 3) - 1)
-                      const SizedBox(height: 8),
-                  ],
-                );
-              },
-            ),
-            // Fallback when no patients connected
-            if (connectionState.myElderly.isEmpty) ...[
+            // Real upcoming tasks from API
+            if (_upcomingTasks.isEmpty && !_isLoading)
               _buildTaskItem(
-                task: 'No tasks - Connect with patients first',
-                time: '--:--',
-                type: 'Info',
-                icon: Icons.info_outline,
-                color: AppColors.textSecondary,
-              ),
-            ],
+                taskData: {'title': 'No upcoming tasks', 'time': '', 'task_type': 'Info', 'completed': false},
+                onToggle: null,
+              )
+            else
+              ..._upcomingTasks.where((t) => t['completed'] != true).take(3).map((task) => Column(
+                children: [
+                  _buildTaskItem(
+                    taskData: task,
+                    onToggle: () => _toggleTask(task['task_id']),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              )),
             
             const SizedBox(height: 24),
             
@@ -459,19 +466,10 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
               children: [
                 Expanded(
                   child: _buildQuickAction(
-                    icon: Icons.restaurant_menu,
-                    label: 'Create\nMeal Plan',
-                    color: AppColors.neonOrange,
-                    onTap: () => widget.onNavigateToPatients(),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildQuickAction(
                     icon: Icons.assessment,
                     label: 'View\nReports',
                     color: AppColors.neonPurple,
-                    onTap: () => widget.onNavigateToPatients(),
+                    onTap: widget.onNavigateToReports,
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -501,7 +499,7 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
                   ),
                 ),
                 TextButton(
-                  onPressed: () => widget.onNavigateToPatients(),
+                  onPressed: widget.onNavigateToAlerts,
                   child: const Text('View All', style: TextStyle(color: AppColors.neonCyan)),
                 ),
               ],
@@ -820,7 +818,7 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
               ),
               // View button
               GestureDetector(
-                onTap: () => widget.onNavigateToPatients(),
+                onTap: widget.onNavigateToAlerts,
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                   decoration: BoxDecoration(
@@ -928,13 +926,51 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
     );
   }
 
+  Future<void> _toggleTask(String? taskId) async {
+    if (taskId == null) return;
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      await apiService.put('/api/tasks/toggle/$taskId');
+      _fetchData(); // Refresh
+    } catch (e) {
+      debugPrint('Error toggling task: $e');
+    }
+  }
+
+  IconData _getTaskIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'exercise': return Icons.accessibility_new;
+      case 'medication': return Icons.medication;
+      case 'check-up': return Icons.health_and_safety;
+      case 'nutrition': return Icons.restaurant;
+      case 'assessment': return Icons.assessment;
+      default: return Icons.task;
+    }
+  }
+
+  Color _getTaskColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'exercise': return AppColors.neonGreen;
+      case 'medication': return AppColors.neonPurple;
+      case 'check-up': return AppColors.neonCyan;
+      case 'nutrition': return AppColors.neonOrange;
+      case 'assessment': return AppColors.neonGreen;
+      default: return AppColors.neonCyan;
+    }
+  }
+
   Widget _buildTaskItem({
-    required String task,
-    required String time,
-    required String type,
-    required IconData icon,
-    required Color color,
+    required Map<String, dynamic> taskData,
+    required VoidCallback? onToggle,
   }) {
+    final title = taskData['title'] ?? 'Task';
+    final time = taskData['time'] ?? '';
+    final type = taskData['task_type'] ?? 'General';
+    final completed = taskData['completed'] == true;
+    final patientName = taskData['patient_name'] ?? '';
+    final icon = _getTaskIcon(type);
+    final color = completed ? AppColors.textSecondary : _getTaskColor(type);
+
     return GlassmorphicCard(
       padding: const EdgeInsets.all(12),
       child: Row(
@@ -953,43 +989,52 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  task,
-                  style: const TextStyle(
+                  patientName.isNotEmpty ? '$title - $patientName' : title,
+                  style: TextStyle(
                     fontSize: 14,
                     fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+                    color: completed ? AppColors.textSecondary : AppColors.textPrimary,
+                    decoration: completed ? TextDecoration.lineThrough : null,
                   ),
                 ),
-                Row(
-                  children: [
-                    Text(
-                      time,
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        type,
-                        style: TextStyle(fontSize: 10, color: color),
-                      ),
-                    ),
-                  ],
-                ),
+                if (time.isNotEmpty || type.isNotEmpty)
+                  Row(
+                    children: [
+                      if (time.isNotEmpty)
+                        Text(
+                          time,
+                          style: const TextStyle(
+                            fontSize: 12,
+                            color: AppColors.textSecondary,
+                          ),
+                        ),
+                      if (time.isNotEmpty && type.isNotEmpty)
+                        const SizedBox(width: 8),
+                      if (type.isNotEmpty)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            type,
+                            style: TextStyle(fontSize: 10, color: color),
+                          ),
+                        ),
+                    ],
+                  ),
               ],
             ),
           ),
-          IconButton(
-            onPressed: () {},
-            icon: const Icon(Icons.check_circle_outline, color: AppColors.textSecondary),
-          ),
+          if (onToggle != null)
+            IconButton(
+              onPressed: onToggle,
+              icon: Icon(
+                completed ? Icons.check_circle : Icons.check_circle_outline,
+                color: completed ? AppColors.neonGreen : AppColors.textSecondary,
+              ),
+            ),
         ],
       ),
     );
@@ -2260,13 +2305,402 @@ class _PatientNutritionSummaryState extends ConsumerState<_PatientNutritionSumma
 
 // ============= Tasks Tab =============
 
-class _TasksTab extends ConsumerWidget {
+class _TasksTab extends ConsumerStatefulWidget {
   const _TasksTab();
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final connectionState = ref.watch(connectionProvider);
+  ConsumerState<_TasksTab> createState() => _TasksTabState();
+}
+
+class _TasksTabState extends ConsumerState<_TasksTab> {
+  List<Map<String, dynamic>> _tasks = [];
+  bool _isLoading = true;
+  String _filter = 'today'; // today, week, all
+  late String _userId;
+
+  @override
+  void initState() {
+    super.initState();
+    _userId = '';
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _userId = ref.read(userProfileProvider)?.uid ?? '';
+      _loadTasks();
+    });
+  }
+
+  Future<void> _loadTasks() async {
+    if (!mounted || _userId.isEmpty) return;
+    setState(() => _isLoading = true);
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.get('/api/tasks/list/$_userId?filter=$_filter&include_completed=true');
+      if (response.success && response.data != null) {
+        if (mounted) {
+          setState(() {
+            _tasks = List<Map<String, dynamic>>.from(
+              (response.data['tasks'] as List?)?.map((t) => Map<String, dynamic>.from(t as Map)) ?? [],
+            );
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error loading tasks: $e');
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _toggleTask(String taskId) async {
+    if (!mounted) return;
+    // Optimistic UI update
+    setState(() {
+      final idx = _tasks.indexWhere((t) => t['task_id'] == taskId);
+      if (idx != -1) {
+        _tasks[idx]['completed'] = !(_tasks[idx]['completed'] == true);
+      }
+    });
+    try {
+      final api = ref.read(apiServiceProvider);
+      await api.put('/api/tasks/toggle/$taskId');
+    } catch (e) {
+      debugPrint('Error toggling task: $e');
+      if (mounted) _loadTasks(); // Revert on error
+    }
+  }
+
+  Future<void> _deleteTask(String taskId) async {
+    if (!mounted) return;
+    setState(() => _tasks.removeWhere((t) => t['task_id'] == taskId));
+    try {
+      final api = ref.read(apiServiceProvider);
+      await api.delete('/api/tasks/delete/$taskId?caregiver_id=$_userId');
+    } catch (e) {
+      debugPrint('Error deleting task: $e');
+      if (mounted) _loadTasks();
+    }
+  }
+
+  Future<void> _showAddTaskDialog() async {
+    if (!mounted) return;
+    // Capture ALL ref-dependent values BEFORE opening the dialog
+    final api = ref.read(apiServiceProvider);
+    final connectionState = ref.read(connectionProvider);
     final patients = connectionState.myElderly;
+    final userId = _userId;
+    
+    final titleController = TextEditingController();
+    String selectedType = 'General';
+    bool isPriority = false;
+    String? selectedPatientId;
+    String? selectedPatientName;
+    TimeOfDay? selectedTime;
+    String selectedDuration = '30 min';
+
+    bool? result;
+    try {
+      result = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) => Container(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+            top: 20, left: 20, right: 20,
+          ),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border.all(color: AppColors.glassBorder),
+          ),
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    decoration: BoxDecoration(
+                      color: AppColors.textSecondary.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text('New Task', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+                const SizedBox(height: 20),
+                // Title
+                TextField(
+                  controller: titleController,
+                  style: const TextStyle(color: AppColors.textPrimary),
+                  decoration: InputDecoration(
+                    labelText: 'Task Title',
+                    labelStyle: const TextStyle(color: AppColors.textSecondary),
+                    filled: true,
+                    fillColor: AppColors.surfaceLight,
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                // Time & Duration row
+                Row(
+                  children: [
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final time = await showTimePicker(
+                            context: ctx,
+                            initialTime: selectedTime ?? TimeOfDay.now(),
+                            builder: (context, child) {
+                              return Theme(
+                                data: ThemeData.dark().copyWith(
+                                  colorScheme: const ColorScheme.dark(
+                                    primary: AppColors.neonCyan,
+                                    surface: AppColors.surfaceLight,
+                                  ),
+                                ),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (time != null) {
+                            try {
+                              setSheetState(() => selectedTime = time);
+                            } catch (_) {}
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceLight,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                selectedTime != null
+                                    ? selectedTime!.format(ctx)
+                                    : 'Select Time',
+                                style: TextStyle(
+                                  color: selectedTime != null ? AppColors.textPrimary : AppColors.textSecondary,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const Icon(Icons.access_time, color: AppColors.neonCyan, size: 20),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () async {
+                          final duration = await showDialog<String>(
+                            context: ctx,
+                            builder: (context) => AlertDialog(
+                              backgroundColor: AppColors.surface,
+                              title: const Text('Select Duration', style: TextStyle(color: AppColors.textPrimary)),
+                              content: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                children: ['5 min', '10 min', '15 min', '20 min', '30 min', '45 min', '1 hour', '2 hours']
+                                    .map((d) => ListTile(
+                                          title: Text(d, style: const TextStyle(color: AppColors.textPrimary)),
+                                          onTap: () => Navigator.pop(context, d),
+                                          selected: d == selectedDuration,
+                                          selectedColor: AppColors.neonCyan,
+                                        ))
+                                    .toList(),
+                              ),
+                            ),
+                          );
+                          if (duration != null) {
+                            try {
+                              setSheetState(() => selectedDuration = duration);
+                            } catch (_) {}
+                          }
+                        },
+                        child: Container(
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceLight,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                selectedDuration,
+                                style: const TextStyle(color: AppColors.textPrimary, fontSize: 14),
+                              ),
+                              const Icon(Icons.timer, color: AppColors.neonOrange, size: 20),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                // Task Type
+                const Text('Type', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8, runSpacing: 8,
+                  children: ['General', 'Exercise', 'Medication', 'Check-up', 'Nutrition', 'Assessment'].map((type) {
+                    final isSelected = selectedType == type;
+                    return GestureDetector(
+                      onTap: () => setSheetState(() => selectedType = type),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isSelected ? AppColors.neonCyan.withOpacity(0.15) : AppColors.surfaceLight,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: isSelected ? AppColors.neonCyan : Colors.transparent),
+                        ),
+                        child: Text(type, style: TextStyle(fontSize: 12, color: isSelected ? AppColors.neonCyan : AppColors.textSecondary)),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                // Patient selector
+                if (patients.isNotEmpty) ...[
+                  const Text('Assign Patient', style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8, runSpacing: 8,
+                    children: [
+                      GestureDetector(
+                        onTap: () => setSheetState(() { selectedPatientId = null; selectedPatientName = null; }),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: selectedPatientId == null ? AppColors.neonCyan.withOpacity(0.15) : AppColors.surfaceLight,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: selectedPatientId == null ? AppColors.neonCyan : Colors.transparent),
+                          ),
+                          child: Text('None', style: TextStyle(fontSize: 12, color: selectedPatientId == null ? AppColors.neonCyan : AppColors.textSecondary)),
+                        ),
+                      ),
+                      ...patients.map((p) {
+                        final isSelected = selectedPatientId == p.id;
+                        return GestureDetector(
+                          onTap: () => setSheetState(() { selectedPatientId = p.id; selectedPatientName = p.name; }),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: isSelected ? AppColors.neonCyan.withOpacity(0.15) : AppColors.surfaceLight,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: isSelected ? AppColors.neonCyan : Colors.transparent),
+                            ),
+                            child: Text(p.name, style: TextStyle(fontSize: 12, color: isSelected ? AppColors.neonCyan : AppColors.textSecondary)),
+                          ),
+                        );
+                      }),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                ],
+                // Priority toggle
+                Row(
+                  children: [
+                    const Text('Priority', style: TextStyle(color: AppColors.textSecondary)),
+                    const Spacer(),
+                    Switch(
+                      value: isPriority,
+                      onChanged: (v) => setSheetState(() => isPriority = v),
+                      activeColor: AppColors.neonRed,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                // Create button
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    onPressed: () {
+                      if (titleController.text.trim().isEmpty) return;
+                      Navigator.pop(ctx, true);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppColors.neonGreen,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                    ),
+                    child: const Text('Create Task', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    } catch (e) {
+      debugPrint('Error showing dialog: $e');
+    }
+
+    // Capture values before using them
+    final titleText = titleController.text.trim();
+    final timeText = selectedTime != null 
+        ? '${selectedTime!.hour.toString().padLeft(2, '0')}:${selectedTime!.minute.toString().padLeft(2, '0')}' 
+        : '';
+
+    if (result == true && titleText.isNotEmpty && mounted) {
+      try {
+        await api.post('/api/tasks/create', body: {
+          'caregiver_id': userId,
+          'patient_id': selectedPatientId ?? '',
+          'patient_name': selectedPatientName ?? '',
+          'title': titleText,
+          'task_type': selectedType,
+          'time': timeText,
+          'duration': selectedDuration,
+          'is_priority': isPriority,
+        });
+        _loadTasks();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Task created!'), backgroundColor: AppColors.neonGreen, behavior: SnackBarBehavior.floating),
+          );
+        }
+      } catch (e) {
+        debugPrint('Error creating task: $e');
+      }
+    }
+    
+    // Dispose controller after all operations complete
+    Future.microtask(() => titleController.dispose());
+  }
+
+  IconData _getTaskIcon(String type) {
+    switch (type.toLowerCase()) {
+      case 'exercise': return Icons.accessibility_new;
+      case 'medication': return Icons.medication;
+      case 'check-up': return Icons.health_and_safety;
+      case 'nutrition': return Icons.restaurant;
+      case 'assessment': return Icons.assessment;
+      default: return Icons.task;
+    }
+  }
+
+  Color _getTaskColor(String type) {
+    switch (type.toLowerCase()) {
+      case 'exercise': return AppColors.neonGreen;
+      case 'medication': return AppColors.neonPurple;
+      case 'check-up': return AppColors.neonCyan;
+      case 'nutrition': return AppColors.neonOrange;
+      case 'assessment': return AppColors.neonGreen;
+      default: return AppColors.neonCyan;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2284,26 +2718,29 @@ class _TasksTab extends ConsumerWidget {
                     color: AppColors.textPrimary,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: AppColors.neonGreen,
-                    borderRadius: BorderRadius.circular(20),
-                  ),
-                  child: const Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.add, size: 18, color: Colors.black),
-                      SizedBox(width: 4),
-                      Text(
-                        'Add Task',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: Colors.black,
+                GestureDetector(
+                  onTap: _showAddTaskDialog,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppColors.neonGreen,
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.add, size: 18, color: Colors.black),
+                        SizedBox(width: 4),
+                        Text(
+                          'Add Task',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.black,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -2315,199 +2752,214 @@ class _TasksTab extends ConsumerWidget {
             padding: const EdgeInsets.symmetric(horizontal: 20),
             child: Row(
               children: [
-                _buildFilterChip('Today', true),
+                _buildFilterChip('Today', _filter == 'today', () {
+                  setState(() => _filter = 'today');
+                  _loadTasks();
+                }),
                 const SizedBox(width: 8),
-                _buildFilterChip('This Week', false),
+                _buildFilterChip('This Week', _filter == 'week', () {
+                  setState(() => _filter = 'week');
+                  _loadTasks();
+                }),
                 const SizedBox(width: 8),
-                _buildFilterChip('All', false),
+                _buildFilterChip('All', _filter == 'all', () {
+                  setState(() => _filter = 'all');
+                  _loadTasks();
+                }),
               ],
             ),
           ),
           
           const SizedBox(height: 16),
           
-          // Task List - Dynamic based on connected patients
+          // Task List
           Expanded(
-            child: ListView(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              children: patients.isEmpty
-                  ? [
-                      const SizedBox(height: 40),
-                      Center(
-                        child: Column(
-                          children: [
-                            Icon(Icons.task_outlined, size: 64, color: AppColors.textSecondary.withOpacity(0.5)),
-                            const SizedBox(height: 16),
-                            Text(
-                              'No tasks yet',
-                              style: TextStyle(
-                                fontSize: 18,
-                                color: AppColors.textSecondary,
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator(color: AppColors.neonGreen))
+                : RefreshIndicator(
+                    onRefresh: _loadTasks,
+                    color: AppColors.neonGreen,
+                    child: _tasks.isEmpty
+                        ? ListView(
+                            children: [
+                              const SizedBox(height: 60),
+                              Center(
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.task_outlined, size: 64, color: AppColors.textSecondary.withOpacity(0.5)),
+                                    const SizedBox(height: 16),
+                                    const Text(
+                                      'No tasks yet',
+                                      style: TextStyle(fontSize: 18, color: AppColors.textSecondary),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      'Tap + to add a task',
+                                      style: TextStyle(fontSize: 14, color: AppColors.textSecondary.withOpacity(0.7)),
+                                    ),
+                                  ],
+                                ),
                               ),
-                            ),
-                            const SizedBox(height: 8),
-                            Text(
-                              'Connect with patients to see tasks',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.textSecondary.withOpacity(0.7),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ]
-                  : _buildDynamicTaskList(patients),
-            ),
+                            ],
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            itemCount: _tasks.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final task = _tasks[index];
+                              return _buildTaskCard(task, index);
+                            },
+                          ),
+                  ),
           ),
         ],
       ),
     );
   }
 
-  /// Generate dynamic task list based on connected patients
-  List<Widget> _buildDynamicTaskList(List<ElderlyInfo> patients) {
-    final taskTemplates = [
-      ('Physio session', 'Exercise', AppColors.neonGreen, '30 min', true),
-      ('Medication reminder', 'Medication', AppColors.neonPurple, '5 min', false),
-      ('Health check', 'Check-up', AppColors.neonCyan, '20 min', false),
-      ('Update meal plan', 'Nutrition', AppColors.neonOrange, '15 min', false),
-      ('TUG assessment', 'Assessment', AppColors.neonGreen, '10 min', false),
-    ];
-    
-    final times = ['10:00 AM', '11:30 AM', '2:00 PM', '3:30 PM', '4:00 PM'];
-    final List<Widget> widgets = [];
-    
-    for (int i = 0; i < patients.length && i < taskTemplates.length; i++) {
-      final patient = patients[i];
-      final template = taskTemplates[i];
-      if (i > 0) widgets.add(const SizedBox(height: 10));
-      widgets.add(
-        _buildTaskCard(
-          title: '${template.$1} - ${patient.name}',
-          time: times[i % times.length],
-          duration: template.$4,
-          type: template.$2,
-          color: template.$3,
-          isPriority: template.$5,
+  Widget _buildFilterChip(String label, bool isSelected, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.neonGreen.withOpacity(0.15) : AppColors.surfaceLight,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: isSelected ? AppColors.neonGreen : Colors.transparent,
+          ),
         ),
-      );
-    }
-    
-    return widgets;
-  }
-
-  Widget _buildFilterChip(String label, bool isSelected) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      decoration: BoxDecoration(
-        color: isSelected ? AppColors.neonGreen.withOpacity(0.15) : AppColors.surfaceLight,
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: isSelected ? AppColors.neonGreen : Colors.transparent,
-        ),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          fontSize: 13,
-          color: isSelected ? AppColors.neonGreen : AppColors.textSecondary,
-          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 13,
+            color: isSelected ? AppColors.neonGreen : AppColors.textSecondary,
+            fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildTaskCard({
-    required String title,
-    required String time,
-    required String duration,
-    required String type,
-    required Color color,
-    required bool isPriority,
-  }) {
-    return GlassmorphicCard(
-      glowColor: isPriority ? color : null,
-      glowIntensity: 0.1,
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 4,
-            height: 50,
-            decoration: BoxDecoration(
-              color: color,
-              borderRadius: BorderRadius.circular(2),
-            ),
+  Widget _buildTaskCard(Map<String, dynamic> task, int index) {
+    final title = task['title'] ?? 'Task';
+    final time = task['time'] ?? '';
+    final duration = task['duration'] ?? '';
+    final type = task['task_type'] ?? 'General';
+    final completed = task['completed'] == true;
+    final isPriority = task['is_priority'] == true;
+    final patientName = task['patient_name'] ?? '';
+    final taskId = task['task_id'] ?? '';
+    final color = completed ? AppColors.textSecondary : _getTaskColor(type);
+    final displayTitle = patientName.isNotEmpty ? '$title - $patientName' : title;
+    final timeInfo = [if (time.isNotEmpty) time, if (duration.isNotEmpty) duration].join(' • ');
+
+    return Dismissible(
+      key: ValueKey('dismissible_$index'),
+      direction: DismissDirection.endToStart,
+      background: Container(
+        alignment: Alignment.centerRight,
+        padding: const EdgeInsets.only(right: 20),
+        decoration: BoxDecoration(
+          color: AppColors.neonRed.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: const Icon(Icons.delete, color: AppColors.neonRed),
+      ),
+      confirmDismiss: (direction) async {
+        return await showDialog(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: AppColors.surface,
+            title: const Text('Delete Task', style: TextStyle(color: AppColors.textPrimary)),
+            content: Text('Delete "$title"?', style: const TextStyle(color: AppColors.textSecondary)),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+              TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete', style: TextStyle(color: AppColors.neonRed))),
+            ],
           ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ),
-                    if (isPriority)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: AppColors.neonRed.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: const Text(
-                          'Priority',
+        );
+      },
+      onDismissed: (_) => _deleteTask(taskId),
+      child: GlassmorphicCard(
+        glowColor: isPriority && !completed ? color : null,
+        glowIntensity: 0.1,
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
+            Container(
+              width: 4,
+              height: 50,
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          displayTitle,
                           style: TextStyle(
-                            fontSize: 9,
-                            color: AppColors.neonRed,
+                            fontSize: 14,
                             fontWeight: FontWeight.w600,
+                            color: completed ? AppColors.textSecondary : AppColors.textPrimary,
+                            decoration: completed ? TextDecoration.lineThrough : null,
                           ),
                         ),
                       ),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Row(
-                  children: [
-                    const Icon(Icons.schedule, size: 14, color: AppColors.textSecondary),
-                    const SizedBox(width: 4),
-                    Text(
-                      '$time • $duration',
-                      style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      if (isPriority && !completed)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: AppColors.neonRed.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'Priority',
+                            style: TextStyle(fontSize: 9, color: AppColors.neonRed, fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                    ],
+                  ),
+                  if (timeInfo.isNotEmpty || type.isNotEmpty) ...[
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        if (timeInfo.isNotEmpty) ...[
+                          const Icon(Icons.schedule, size: 14, color: AppColors.textSecondary),
+                          const SizedBox(width: 4),
+                          Text(timeInfo, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                          const SizedBox(width: 8),
+                        ],
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: color.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(type, style: TextStyle(fontSize: 10, color: color)),
+                        ),
+                      ],
                     ),
-                    const SizedBox(width: 8),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        type,
-                        style: TextStyle(fontSize: 10, color: color),
-                      ),
-                    ),
                   ],
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          Checkbox(
-            value: false,
-            onChanged: (value) {},
-            activeColor: AppColors.neonGreen,
-            side: const BorderSide(color: AppColors.textSecondary),
-          ),
-        ],
+            Checkbox(
+              value: completed,
+              onChanged: (_) => _toggleTask(taskId),
+              activeColor: AppColors.neonGreen,
+              side: const BorderSide(color: AppColors.textSecondary),
+            ),
+          ],
+        ),
       ),
     );
   }
