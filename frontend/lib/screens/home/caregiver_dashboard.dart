@@ -16,6 +16,7 @@ import '../../widgets/common/glassmorphic_card.dart';
 import '../../widgets/mjpeg_stream.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
+import '../../providers/physio_provider.dart';
 import '../guardian/alerts_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -400,29 +401,42 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
             ),
             const SizedBox(height: 8),
             
-            _buildTaskItem(
-              task: 'Physio session with Margaret',
-              time: '10:00 AM',
-              type: 'Exercise',
-              icon: Icons.accessibility_new,
-              color: AppColors.neonGreen,
+            // Dynamic tasks based on connected patients
+            ...List.generate(
+              connectionState.myElderly.length.clamp(0, 3),
+              (index) {
+                final elderly = connectionState.myElderly[index];
+                final tasks = [
+                  ('Physio session with ${elderly.name}', '10:00 AM', 'Exercise', Icons.accessibility_new, AppColors.neonGreen),
+                  ('Medication reminder for ${elderly.name}', '11:30 AM', 'Medication', Icons.medication, AppColors.neonPurple),
+                  ('Health check for ${elderly.name}', '2:00 PM', 'Check-up', Icons.health_and_safety, AppColors.neonCyan),
+                ];
+                final task = tasks[index % tasks.length];
+                return Column(
+                  children: [
+                    _buildTaskItem(
+                      task: task.$1,
+                      time: task.$2,
+                      type: task.$3,
+                      icon: task.$4,
+                      color: task.$5,
+                    ),
+                    if (index < connectionState.myElderly.length.clamp(0, 3) - 1)
+                      const SizedBox(height: 8),
+                  ],
+                );
+              },
             ),
-            const SizedBox(height: 8),
-            _buildTaskItem(
-              task: 'Medication reminder for Robert',
-              time: '11:30 AM',
-              type: 'Medication',
-              icon: Icons.medication,
-              color: AppColors.neonPurple,
-            ),
-            const SizedBox(height: 8),
-            _buildTaskItem(
-              task: 'Health check for Eleanor',
-              time: '2:00 PM',
-              type: 'Check-up',
-              icon: Icons.health_and_safety,
-              color: AppColors.neonCyan,
-            ),
+            // Fallback when no patients connected
+            if (connectionState.myElderly.isEmpty) ...[
+              _buildTaskItem(
+                task: 'No tasks - Connect with patients first',
+                time: '--:--',
+                type: 'Info',
+                icon: Icons.info_outline,
+                color: AppColors.textSecondary,
+              ),
+            ],
             
             const SizedBox(height: 24),
             
@@ -2095,11 +2109,13 @@ class _PatientNutritionSummaryState extends ConsumerState<_PatientNutritionSumma
 
 // ============= Tasks Tab =============
 
-class _TasksTab extends StatelessWidget {
+class _TasksTab extends ConsumerWidget {
   const _TasksTab();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final connectionState = ref.watch(connectionProvider);
+    final patients = connectionState.myElderly;
     return SafeArea(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2159,61 +2175,75 @@ class _TasksTab extends StatelessWidget {
           
           const SizedBox(height: 16),
           
-          // Task List
+          // Task List - Dynamic based on connected patients
           Expanded(
             child: ListView(
               padding: const EdgeInsets.symmetric(horizontal: 20),
-              children: [
-                _buildTaskCard(
-                  title: 'Physio session - Margaret',
-                  time: '10:00 AM',
-                  duration: '30 min',
-                  type: 'Exercise',
-                  color: AppColors.neonGreen,
-                  isPriority: true,
-                ),
-                const SizedBox(height: 10),
-                _buildTaskCard(
-                  title: 'Medication reminder - Robert',
-                  time: '11:30 AM',
-                  duration: '5 min',
-                  type: 'Medication',
-                  color: AppColors.neonPurple,
-                  isPriority: false,
-                ),
-                const SizedBox(height: 10),
-                _buildTaskCard(
-                  title: 'Health check - Eleanor',
-                  time: '2:00 PM',
-                  duration: '20 min',
-                  type: 'Check-up',
-                  color: AppColors.neonCyan,
-                  isPriority: false,
-                ),
-                const SizedBox(height: 10),
-                _buildTaskCard(
-                  title: 'Update meal plan - James',
-                  time: '3:30 PM',
-                  duration: '15 min',
-                  type: 'Nutrition',
-                  color: AppColors.neonOrange,
-                  isPriority: false,
-                ),
-                const SizedBox(height: 10),
-                _buildTaskCard(
-                  title: 'TUG test - Helen',
-                  time: '4:00 PM',
-                  duration: '10 min',
-                  type: 'Assessment',
-                  color: AppColors.neonGreen,
-                  isPriority: false,
-                ),
-              ],
+              children: patients.isEmpty
+                  ? [
+                      const SizedBox(height: 40),
+                      Center(
+                        child: Column(
+                          children: [
+                            Icon(Icons.task_outlined, size: 64, color: AppColors.textSecondary.withOpacity(0.5)),
+                            const SizedBox(height: 16),
+                            Text(
+                              'No tasks yet',
+                              style: TextStyle(
+                                fontSize: 18,
+                                color: AppColors.textSecondary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Connect with patients to see tasks',
+                              style: TextStyle(
+                                fontSize: 14,
+                                color: AppColors.textSecondary.withOpacity(0.7),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ]
+                  : _buildDynamicTaskList(patients),
             ),
           ),
         ],
       ),
     );
+  }
+
+  /// Generate dynamic task list based on connected patients
+  List<Widget> _buildDynamicTaskList(List<ElderlyInfo> patients) {
+    final taskTemplates = [
+      ('Physio session', 'Exercise', AppColors.neonGreen, '30 min', true),
+      ('Medication reminder', 'Medication', AppColors.neonPurple, '5 min', false),
+      ('Health check', 'Check-up', AppColors.neonCyan, '20 min', false),
+      ('Update meal plan', 'Nutrition', AppColors.neonOrange, '15 min', false),
+      ('TUG assessment', 'Assessment', AppColors.neonGreen, '10 min', false),
+    ];
+    
+    final times = ['10:00 AM', '11:30 AM', '2:00 PM', '3:30 PM', '4:00 PM'];
+    final List<Widget> widgets = [];
+    
+    for (int i = 0; i < patients.length && i < taskTemplates.length; i++) {
+      final patient = patients[i];
+      final template = taskTemplates[i];
+      if (i > 0) widgets.add(const SizedBox(height: 10));
+      widgets.add(
+        _buildTaskCard(
+          title: '${template.$1} - ${patient.name}',
+          time: times[i % times.length],
+          duration: template.$4,
+          type: template.$2,
+          color: template.$3,
+          isPriority: template.$5,
+        ),
+      );
+    }
+    
+    return widgets;
   }
 
   Widget _buildFilterChip(String label, bool isSelected) {
@@ -2869,13 +2899,37 @@ class _ReportsTabState extends ConsumerState<_ReportsTab> {
           break;
           
         case 'physio_progress':
-          // Aggregate gait analysis data
+          // Fetch real exercise plan data for connected elderly
+          final connectionState = ref.read(connectionProvider);
+          final elderly = connectionState.myElderly;
+          int totalPlans = 0;
+          int completedPlans = 0;
+          final apiService = ref.read(apiServiceProvider);
+          
+          for (final e in elderly.take(3)) {
+            try {
+              final planResponse = await apiService.get<Map<String, dynamic>>(
+                '/api/physio/plans/${e.id}',
+                queryParams: {'days': 7},
+                requireAuth: false,
+              );
+              if (planResponse.success && planResponse.data != null) {
+                final plans = planResponse.data!['plans'] as List? ?? [];
+                totalPlans += plans.length;
+                completedPlans += plans.where((p) => p['completed'] == true).length;
+              }
+            } catch (_) {}
+          }
+          
           reportData = {
-            'sessions_completed': 0,
-            'gait_improvement': '+0%',
+            'sessions_completed': completedPlans,
+            'total_plans': totalPlans,
+            'gait_improvement': totalPlans > 0 ? '${((completedPlans / totalPlans) * 100).round()}%' : 'N/A',
             'tug_score_avg': 'N/A',
             'period': 'Last 7 days',
-            'note': 'Start a physio session to track progress',
+            'note': elderly.isEmpty
+                ? 'Connect with elderly patients to see their progress'
+                : 'Showing data for ${elderly.length} patient(s)',
           };
           break;
           

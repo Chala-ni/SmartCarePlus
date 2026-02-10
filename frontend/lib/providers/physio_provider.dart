@@ -43,6 +43,484 @@ class Exercise {
   }
 }
 
+// ============= Patient Profile Models =============
+
+/// BMI calculation result from backend
+class BMIResult {
+  final double bmi;
+  final String category;
+  final String healthRisk;
+  final String weightStatus;
+  final List<String> recommendations;
+
+  BMIResult({
+    required this.bmi,
+    required this.category,
+    required this.healthRisk,
+    required this.weightStatus,
+    required this.recommendations,
+  });
+
+  factory BMIResult.fromJson(Map<String, dynamic> json) {
+    return BMIResult(
+      bmi: (json['bmi'] ?? 0).toDouble(),
+      category: json['category'] ?? 'unknown',
+      healthRisk: json['health_risk'] ?? 'Unknown',
+      weightStatus: json['weight_status'] ?? 'Unknown',
+      recommendations: List<String>.from(json['recommendations'] ?? []),
+    );
+  }
+
+  String get displayCategory {
+    switch (category) {
+      case 'underweight': return 'Underweight';
+      case 'normal': return 'Normal';
+      case 'overweight': return 'Overweight';
+      case 'obese_class_1': return 'Obese I';
+      case 'obese_class_2': return 'Obese II';
+      case 'obese_class_3': return 'Obese III';
+      default: return category;
+    }
+  }
+}
+
+/// Affected joint information
+class AffectedJoint {
+  final String location;
+  final String severity;
+  final int painLevel;
+  final DateTime? diagnosedDate;
+
+  AffectedJoint({
+    required this.location,
+    required this.severity,
+    this.painLevel = 0,
+    this.diagnosedDate,
+  });
+
+  factory AffectedJoint.fromJson(Map<String, dynamic> json) {
+    return AffectedJoint(
+      location: json['location'] ?? '',
+      severity: json['severity'] ?? 'none',
+      painLevel: json['pain_level'] ?? 0,
+      diagnosedDate: json['diagnosed_date'] != null 
+          ? DateTime.tryParse(json['diagnosed_date']) 
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'location': location,
+      'severity': severity,
+      'pain_level': painLevel,
+    };
+  }
+}
+
+/// Patient medical history
+class MedicalHistory {
+  final String arthritisType;
+  final String arthritisSeverity;
+  final List<AffectedJoint> affectedJoints;
+  final bool hasOsteoporosis;
+  final bool hasCardiovascularIssues;
+  final bool hasBalanceIssues;
+  final int fallsLastYear;
+  final bool fearOfFalling;
+  final List<String> otherConditions;
+  final List<String> medications;
+
+  MedicalHistory({
+    required this.arthritisType,
+    required this.arthritisSeverity,
+    required this.affectedJoints,
+    this.hasOsteoporosis = false,
+    this.hasCardiovascularIssues = false,
+    this.hasBalanceIssues = false,
+    this.fallsLastYear = 0,
+    this.fearOfFalling = false,
+    this.otherConditions = const [],
+    this.medications = const [],
+  });
+
+  factory MedicalHistory.fromJson(Map<String, dynamic> json) {
+    return MedicalHistory(
+      arthritisType: json['arthritis_type'] ?? 'none',
+      arthritisSeverity: json['arthritis_severity'] ?? 'none',
+      affectedJoints: (json['affected_joints'] as List?)
+          ?.map((j) => AffectedJoint.fromJson(j))
+          .toList() ?? [],
+      hasOsteoporosis: json['has_osteoporosis'] ?? false,
+      hasCardiovascularIssues: json['has_cardiovascular_issues'] ?? false,
+      hasBalanceIssues: json['has_balance_issues'] ?? false,
+      fallsLastYear: json['falls_last_year'] ?? 0,
+      fearOfFalling: json['fear_of_falling'] ?? false,
+      otherConditions: List<String>.from(json['other_conditions'] ?? []),
+      medications: List<String>.from(json['medications'] ?? []),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'arthritis_type': arthritisType,
+      'arthritis_severity': arthritisSeverity,
+      'affected_joints': affectedJoints.map((j) => j.toJson()).toList(),
+      'has_osteoporosis': hasOsteoporosis,
+      'has_cardiovascular_issues': hasCardiovascularIssues,
+      'has_balance_issues': hasBalanceIssues,
+      'falls_last_year': fallsLastYear,
+      'fear_of_falling': fearOfFalling,
+    };
+  }
+}
+
+/// Lifestyle factors for exercise planning
+class LifestyleFactors {
+  final String activityLevel;
+  final String mobilityLevel;
+  final bool hasChairForSupport;
+  final bool hasWallForSupport;
+  final bool livesAlone;
+
+  LifestyleFactors({
+    this.activityLevel = 'lightly_active',
+    this.mobilityLevel = 'independent',
+    this.hasChairForSupport = true,
+    this.hasWallForSupport = true,
+    this.livesAlone = false,
+  });
+
+  factory LifestyleFactors.fromJson(Map<String, dynamic> json) {
+    return LifestyleFactors(
+      activityLevel: json['activity_level'] ?? 'lightly_active',
+      mobilityLevel: json['mobility_level'] ?? 'independent',
+      hasChairForSupport: json['has_chair_for_support'] ?? true,
+      hasWallForSupport: json['has_wall_for_support'] ?? true,
+      livesAlone: json['lives_alone'] ?? false,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'activity_level': activityLevel,
+      'mobility_level': mobilityLevel,
+      'has_chair_for_support': hasChairForSupport,
+      'has_wall_for_support': hasWallForSupport,
+      'lives_alone': livesAlone,
+    };
+  }
+}
+
+/// Patient profile from backend
+class PatientProfile {
+  final String? firstName;
+  final String? lastName;
+  final String? dateOfBirth;
+  final int age;
+  final String? gender;
+  final double heightCm;
+  final double weightKg;
+  final String mobilityLevel;
+  final String activityLevel;
+  final MedicalHistory? medicalHistory;
+  final LifestyleFactors? lifestyle;
+  final String painTolerance;
+  final int baselinePainLevel;
+  final int baselineFatigueLevel;
+  final int baselineMobilityScore;
+  final String primaryGoal;
+  final List<String> secondaryGoals;
+  final bool profileComplete;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  PatientProfile({
+    this.firstName,
+    this.lastName,
+    this.dateOfBirth,
+    required this.age,
+    this.gender,
+    required this.heightCm,
+    required this.weightKg,
+    this.mobilityLevel = 'independent',
+    this.activityLevel = 'lightly_active',
+    this.medicalHistory,
+    this.lifestyle,
+    this.painTolerance = 'moderate',
+    this.baselinePainLevel = 0,
+    this.baselineFatigueLevel = 0,
+    this.baselineMobilityScore = 50,
+    this.primaryGoal = 'maintain_mobility',
+    this.secondaryGoals = const [],
+    this.profileComplete = false,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  /// Helper getter for display name
+  String get name => [firstName, lastName].where((s) => s != null && s.isNotEmpty).join(' ');
+
+  factory PatientProfile.fromJson(Map<String, dynamic> json) {
+    return PatientProfile(
+      firstName: json['first_name'],
+      lastName: json['last_name'],
+      dateOfBirth: json['date_of_birth'],
+      age: json['age'] ?? 0,
+      gender: json['gender'],
+      heightCm: (json['height_cm'] ?? 0).toDouble(),
+      weightKg: (json['weight_kg'] ?? 0).toDouble(),
+      mobilityLevel: json['mobility_level'] ?? 'independent',
+      activityLevel: json['activity_level'] ?? 'lightly_active',
+      medicalHistory: json['medical_history'] != null
+          ? MedicalHistory.fromJson(json['medical_history'])
+          : null,
+      lifestyle: json['lifestyle'] != null
+          ? LifestyleFactors.fromJson(json['lifestyle'])
+          : null,
+      painTolerance: json['pain_tolerance'] ?? 'moderate',
+      baselinePainLevel: json['baseline_pain_level'] ?? 0,
+      baselineFatigueLevel: json['baseline_fatigue_level'] ?? 0,
+      baselineMobilityScore: json['baseline_mobility_score'] ?? 50,
+      primaryGoal: json['primary_goal'] ?? 'maintain_mobility',
+      secondaryGoals: List<String>.from(json['secondary_goals'] ?? []),
+      profileComplete: json['profile_complete'] ?? false,
+      createdAt: json['created_at'] != null 
+          ? DateTime.tryParse(json['created_at']) 
+          : null,
+      updatedAt: json['updated_at'] != null 
+          ? DateTime.tryParse(json['updated_at']) 
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      if (firstName != null) 'first_name': firstName,
+      if (lastName != null) 'last_name': lastName,
+      if (dateOfBirth != null) 'date_of_birth': dateOfBirth,
+      if (gender != null) 'gender': gender,
+      'height_cm': heightCm,
+      'weight_kg': weightKg,
+      'pain_tolerance': painTolerance,
+      'baseline_pain_level': baselinePainLevel,
+      'baseline_fatigue_level': baselineFatigueLevel,
+      'baseline_mobility_score': baselineMobilityScore,
+      'primary_goal': primaryGoal,
+      if (secondaryGoals.isNotEmpty) 'secondary_goals': secondaryGoals,
+      if (medicalHistory != null) 'medical_history': medicalHistory!.toJson(),
+      if (lifestyle != null) 'lifestyle': lifestyle!.toJson(),
+    };
+  }
+}
+
+// ============= Exercise Plan Models =============
+
+/// A single exercise in a personalized plan
+class PlannedExercise {
+  final String exerciseId;
+  final String name;
+  final String description;
+  final String category;
+  final String difficulty;
+  final int prescribedReps;
+  final int prescribedSets;
+  final int holdSeconds;
+  final int restSeconds;
+  final bool requiresChair;
+  final bool requiresWall;
+  final bool requiresStanding;
+  final List<String> instructions;
+  final List<String> benefits;
+  final String? videoId;
+  final String notes;
+  final int order;
+  final bool adapted;
+  final String adaptationReason;
+
+  PlannedExercise({
+    required this.exerciseId,
+    required this.name,
+    required this.description,
+    required this.category,
+    required this.difficulty,
+    required this.prescribedReps,
+    required this.prescribedSets,
+    required this.holdSeconds,
+    required this.restSeconds,
+    required this.requiresChair,
+    required this.requiresWall,
+    required this.requiresStanding,
+    required this.instructions,
+    required this.benefits,
+    this.videoId,
+    required this.notes,
+    required this.order,
+    required this.adapted,
+    required this.adaptationReason,
+  });
+
+  factory PlannedExercise.fromJson(Map<String, dynamic> json) {
+    return PlannedExercise(
+      exerciseId: json['exercise_id'] ?? '',
+      name: json['name'] ?? '',
+      description: json['description'] ?? '',
+      category: json['category'] ?? '',
+      difficulty: json['difficulty'] ?? '',
+      prescribedReps: json['prescribed_reps'] ?? 10,
+      prescribedSets: json['prescribed_sets'] ?? 2,
+      holdSeconds: json['hold_seconds'] ?? 0,
+      restSeconds: json['rest_seconds'] ?? 30,
+      requiresChair: json['requires_chair'] ?? false,
+      requiresWall: json['requires_wall'] ?? false,
+      requiresStanding: json['requires_standing'] ?? false,
+      instructions: List<String>.from(json['instructions'] ?? []),
+      benefits: List<String>.from(json['benefits'] ?? []),
+      videoId: json['video_id'],
+      notes: json['notes'] ?? '',
+      order: json['order'] ?? 0,
+      adapted: json['adapted'] ?? false,
+      adaptationReason: json['adaptation_reason'] ?? '',
+    );
+  }
+
+  /// Estimated duration for this exercise in minutes
+  int get estimatedMinutes {
+    int setsTime = (prescribedReps * 3 * prescribedSets); // ~3 sec per rep
+    int restTime = (prescribedSets - 1) * restSeconds;
+    int holdTime = holdSeconds * prescribedSets;
+    return ((setsTime + restTime + holdTime) / 60).ceil();
+  }
+
+  /// Display-friendly duration string
+  String get durationDisplay {
+    final mins = estimatedMinutes;
+    return mins <= 1 ? '1 min' : '$mins min';
+  }
+}
+
+/// Complete daily exercise plan from backend
+class DailyExercisePlan {
+  final String planId;
+  final String userId;
+  final DateTime date;
+  final DateTime createdAt;
+  final List<PlannedExercise> exercises;
+  final int exerciseCount;
+  final int totalDurationMinutes;
+  final String difficultyLevel;
+  final List<String> focusAreas;
+  final bool basedOnProfile;
+  final bool adaptedForPain;
+  final String painAdaptationNotes;
+  final List<String> additionalNotes;
+  final bool completed;
+  final DateTime? completedAt;
+  final String? completionFeedback;
+  final List<String> completedExercises;
+
+  DailyExercisePlan({
+    required this.planId,
+    required this.userId,
+    required this.date,
+    required this.createdAt,
+    required this.exercises,
+    required this.exerciseCount,
+    required this.totalDurationMinutes,
+    required this.difficultyLevel,
+    required this.focusAreas,
+    required this.basedOnProfile,
+    required this.adaptedForPain,
+    required this.painAdaptationNotes,
+    required this.additionalNotes,
+    required this.completed,
+    this.completedAt,
+    this.completionFeedback,
+    this.completedExercises = const [],
+  });
+
+  factory DailyExercisePlan.fromJson(Map<String, dynamic> json) {
+    return DailyExercisePlan(
+      planId: json['plan_id'] ?? '',
+      userId: json['user_id'] ?? '',
+      date: DateTime.tryParse(json['date'] ?? '') ?? DateTime.now(),
+      createdAt: DateTime.tryParse(json['created_at'] ?? '') ?? DateTime.now(),
+      exercises: (json['exercises'] as List?)
+          ?.map((e) => PlannedExercise.fromJson(e))
+          .toList() ?? [],
+      exerciseCount: json['exercise_count'] ?? 0,
+      totalDurationMinutes: json['total_duration_minutes'] ?? 0,
+      difficultyLevel: json['difficulty_level'] ?? 'easy',
+      focusAreas: List<String>.from(json['focus_areas'] ?? []),
+      basedOnProfile: json['based_on_profile'] ?? false,
+      adaptedForPain: json['adapted_for_pain'] ?? false,
+      painAdaptationNotes: json['pain_adaptation_notes'] ?? '',
+      additionalNotes: List<String>.from(json['additional_notes'] ?? []),
+      completed: json['completed'] ?? false,
+      completedAt: json['completed_at'] != null 
+          ? DateTime.tryParse(json['completed_at']) 
+          : null,
+      completionFeedback: json['completion_feedback'],
+      completedExercises: List<String>.from(json['completed_exercises'] ?? []),
+    );
+  }
+
+  /// Get display-friendly difficulty
+  String get difficultyDisplay {
+    switch (difficultyLevel) {
+      case 'very_easy': return 'Very Easy';
+      case 'easy': return 'Easy';
+      case 'moderate': return 'Moderate';
+      case 'challenging': return 'Challenging';
+      default: return difficultyLevel;
+    }
+  }
+
+  /// Check if a specific exercise is completed
+  bool isExerciseCompleted(String exerciseId) {
+    return completedExercises.contains(exerciseId);
+  }
+
+  /// Get completed exercise count
+  int get completedExerciseCount {
+    return completedExercises.length;
+  }
+
+  /// Progress as fraction (0.0 - 1.0)
+  double get progress {
+    if (exerciseCount == 0) return 0;
+    return completedExerciseCount / exerciseCount;
+  }
+
+  /// Create a copy with updated completed exercises
+  DailyExercisePlan copyWithCompletedExercise(String exerciseId) {
+    final updatedList = [...completedExercises];
+    if (!updatedList.contains(exerciseId)) {
+      updatedList.add(exerciseId);
+    }
+    final allDone = updatedList.length >= exerciseCount;
+    return DailyExercisePlan(
+      planId: planId,
+      userId: userId,
+      date: date,
+      createdAt: createdAt,
+      exercises: exercises,
+      exerciseCount: exerciseCount,
+      totalDurationMinutes: totalDurationMinutes,
+      difficultyLevel: difficultyLevel,
+      focusAreas: focusAreas,
+      basedOnProfile: basedOnProfile,
+      adaptedForPain: adaptedForPain,
+      painAdaptationNotes: painAdaptationNotes,
+      additionalNotes: additionalNotes,
+      completed: allDone,
+      completedAt: allDone ? DateTime.now() : completedAt,
+      completionFeedback: completionFeedback,
+      completedExercises: updatedList,
+    );
+  }
+}
+
 class FallRisk {
   final double riskScore;
   final String riskLevel;
@@ -272,6 +750,10 @@ class PhysioState {
   final List<PhysioSession> sessions;
   final List<ScheduledExercise> todaySchedule;
   final ExerciseCompliance? compliance;
+  // New fields for patient profile & exercise plans
+  final PatientProfile? patientProfile;
+  final BMIResult? bmiResult;
+  final DailyExercisePlan? todayPlan;
   final bool isLoading;
   final String? error;
 
@@ -283,6 +765,9 @@ class PhysioState {
     this.sessions = const [],
     this.todaySchedule = const [],
     this.compliance,
+    this.patientProfile,
+    this.bmiResult,
+    this.todayPlan,
     this.isLoading = false,
     this.error,
   });
@@ -307,6 +792,9 @@ class PhysioState {
     List<PhysioSession>? sessions,
     List<ScheduledExercise>? todaySchedule,
     ExerciseCompliance? compliance,
+    PatientProfile? patientProfile,
+    BMIResult? bmiResult,
+    DailyExercisePlan? todayPlan,
     bool? isLoading,
     String? error,
   }) {
@@ -318,6 +806,9 @@ class PhysioState {
       sessions: sessions ?? this.sessions,
       todaySchedule: todaySchedule ?? this.todaySchedule,
       compliance: compliance ?? this.compliance,
+      patientProfile: patientProfile ?? this.patientProfile,
+      bmiResult: bmiResult ?? this.bmiResult,
+      todayPlan: todayPlan ?? this.todayPlan,
       isLoading: isLoading ?? this.isLoading,
       error: error,
     );
@@ -555,6 +1046,184 @@ class PhysioNotifier extends StateNotifier<PhysioState> {
     state = state.copyWith(todaySchedule: mockSchedule, isLoading: false);
   }
 
+  // ============= Patient Profile & Exercise Plan Methods =============
+
+  /// Load patient profile from backend
+  Future<void> loadPatientProfile(String userId) async {
+    try {
+      final response = await _api.get('/api/physio/profile/$userId');
+      if (response.success && response.data != null) {
+        if (response.data['exists'] == true && response.data['profile'] != null) {
+          state = state.copyWith(
+            patientProfile: PatientProfile.fromJson(response.data['profile']),
+          );
+        }
+      }
+    } catch (e) {
+      // Profile not critical for app to work
+    }
+  }
+
+  /// Create or update patient profile
+  Future<bool> updatePatientProfile(String userId, Map<String, dynamic> profileData) async {
+    try {
+      final response = await _api.post('/api/physio/profile/$userId', body: profileData);
+      if (response.success && response.data != null && response.data['profile'] != null) {
+        state = state.copyWith(
+          patientProfile: PatientProfile.fromJson(response.data['profile']),
+        );
+        return true;
+      }
+      return false;
+    } catch (e) {
+      state = state.copyWith(error: 'Failed to update profile: $e');
+      return false;
+    }
+  }
+
+  /// Load BMI data for user
+  Future<void> loadBMI(String userId) async {
+    try {
+      final response = await _api.get('/api/physio/bmi/$userId');
+      if (response.success && response.data != null) {
+        state = state.copyWith(
+          bmiResult: BMIResult.fromJson(response.data),
+        );
+      }
+    } catch (e) {
+      // BMI not critical
+    }
+  }
+
+  /// Calculate BMI without saving
+  Future<BMIResult?> calculateBMI(double weightKg, double heightCm, int age) async {
+    try {
+      final response = await _api.post('/api/physio/bmi/calculate', body: {
+        'weight_kg': weightKg,
+        'height_cm': heightCm,
+        'age': age,
+      });
+      if (response.success && response.data != null) {
+        return BMIResult.fromJson(response.data);
+      }
+      return null;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Load today's exercise plan (creates one if needed)
+  Future<void> loadTodayPlan(String userId) async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      final response = await _api.get('/api/physio/plan/today/$userId');
+      if (response.success && response.data != null) {
+        state = state.copyWith(
+          todayPlan: DailyExercisePlan.fromJson(response.data),
+          isLoading: false,
+        );
+      } else {
+        state = state.copyWith(isLoading: false, error: response.error);
+      }
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: 'Failed to load plan: $e');
+    }
+  }
+
+  /// Generate a new exercise plan (overwrites existing)
+  Future<void> generatePlan(String userId, {String? difficulty}) async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      final body = <String, dynamic>{};
+      if (difficulty != null) body['difficulty'] = difficulty;
+      
+      final response = await _api.post('/api/physio/plan/generate/$userId', body: body);
+      if (response.success && response.data != null) {
+        state = state.copyWith(
+          todayPlan: DailyExercisePlan.fromJson(response.data),
+          isLoading: false,
+        );
+      } else {
+        state = state.copyWith(isLoading: false, error: response.error);
+      }
+    } catch (e) {
+      state = state.copyWith(isLoading: false, error: 'Failed to generate plan: $e');
+    }
+  }
+
+  /// Mark plan as completed
+  Future<void> completePlan(String planId, {String? feedback}) async {
+    try {
+      final body = feedback != null ? {'feedback': feedback} : null;
+      final response = await _api.post('/api/physio/plan/$planId/complete', body: body);
+      if (response.success && state.todayPlan?.planId == planId) {
+        // Mark all exercises as completed
+        final allExerciseIds = state.todayPlan!.exercises
+            .map((e) => e.exerciseId)
+            .toList();
+        // Update local state
+        state = state.copyWith(
+          todayPlan: DailyExercisePlan(
+            planId: state.todayPlan!.planId,
+            userId: state.todayPlan!.userId,
+            date: state.todayPlan!.date,
+            createdAt: state.todayPlan!.createdAt,
+            exercises: state.todayPlan!.exercises,
+            exerciseCount: state.todayPlan!.exerciseCount,
+            totalDurationMinutes: state.todayPlan!.totalDurationMinutes,
+            difficultyLevel: state.todayPlan!.difficultyLevel,
+            focusAreas: state.todayPlan!.focusAreas,
+            basedOnProfile: state.todayPlan!.basedOnProfile,
+            adaptedForPain: state.todayPlan!.adaptedForPain,
+            painAdaptationNotes: state.todayPlan!.painAdaptationNotes,
+            additionalNotes: state.todayPlan!.additionalNotes,
+            completed: true,
+            completedAt: DateTime.now(),
+            completionFeedback: feedback,
+            completedExercises: allExerciseIds,
+          ),
+        );
+      }
+    } catch (e) {
+      state = state.copyWith(error: 'Failed to complete plan: $e');
+    }
+  }
+
+  /// Mark a single exercise as completed within the plan
+  Future<void> completeExerciseInPlan(String planId, String exerciseId) async {
+    try {
+      await _api.post('/api/physio/plan/$planId/exercise/$exerciseId/complete');
+      // Update local state immediately
+      if (state.todayPlan?.planId == planId) {
+        state = state.copyWith(
+          todayPlan: state.todayPlan!.copyWithCompletedExercise(exerciseId),
+        );
+      }
+    } catch (e) {
+      // Still update locally for better UX
+      if (state.todayPlan?.planId == planId) {
+        state = state.copyWith(
+          todayPlan: state.todayPlan!.copyWithCompletedExercise(exerciseId),
+        );
+      }
+    }
+  }
+
+  /// Load all data for a user (profile, BMI, today's plan)
+  Future<void> loadAllUserData(String userId) async {
+    state = state.copyWith(isLoading: true, error: null);
+    try {
+      await Future.wait([
+        loadPatientProfile(userId),
+        loadBMI(userId),
+        loadTodayPlan(userId),
+        loadCompliance(userId),
+      ]);
+    } finally {
+      state = state.copyWith(isLoading: false);
+    }
+  }
+
   void clearError() {
     state = state.copyWith(error: null);
   }
@@ -609,4 +1278,56 @@ final complianceProvider = Provider<ExerciseCompliance?>((ref) {
 final hasMissedExercisesProvider = Provider<bool>((ref) {
   final missed = ref.watch(missedExercisesProvider);
   return missed.isNotEmpty;
+});
+
+// ============= Patient Profile & Plan Providers =============
+
+/// Provider for patient profile from state
+final patientProfileProvider = Provider<PatientProfile?>((ref) {
+  final state = ref.watch(physioProvider);
+  return state.patientProfile;
+});
+
+/// Provider for BMI result from state
+final bmiResultProvider = Provider<BMIResult?>((ref) {
+  final state = ref.watch(physioProvider);
+  return state.bmiResult;
+});
+
+/// Provider for today's exercise plan from state
+final todayPlanProvider = Provider<DailyExercisePlan?>((ref) {
+  final state = ref.watch(physioProvider);
+  return state.todayPlan;
+});
+
+/// Fetch patient profile from API
+final fetchPatientProfileProvider = FutureProvider.family<PatientProfile?, String>((ref, userId) async {
+  final api = ref.watch(apiServiceProvider);
+  final response = await api.get('/api/physio/profile/$userId');
+  if (response.success && response.data != null) {
+    if (response.data['exists'] == true && response.data['profile'] != null) {
+      return PatientProfile.fromJson(response.data['profile']);
+    }
+  }
+  return null;
+});
+
+/// Fetch BMI from API
+final fetchBMIProvider = FutureProvider.family<BMIResult?, String>((ref, userId) async {
+  final api = ref.watch(apiServiceProvider);
+  final response = await api.get('/api/physio/bmi/$userId');
+  if (response.success && response.data != null) {
+    return BMIResult.fromJson(response.data);
+  }
+  return null;
+});
+
+/// Fetch today's exercise plan from API
+final fetchTodayPlanProvider = FutureProvider.family<DailyExercisePlan?, String>((ref, userId) async {
+  final api = ref.watch(apiServiceProvider);
+  final response = await api.get('/api/physio/plan/today/$userId');
+  if (response.success && response.data != null) {
+    return DailyExercisePlan.fromJson(response.data);
+  }
+  return null;
 });

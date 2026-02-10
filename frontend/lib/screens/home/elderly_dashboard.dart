@@ -15,6 +15,7 @@ import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
 import '../../providers/nutrition_provider.dart';
+import '../../providers/physio_provider.dart';
 
 class ElderlyDashboard extends ConsumerStatefulWidget {
   const ElderlyDashboard({super.key});
@@ -140,15 +141,21 @@ class _ElderlyHomeTab extends ConsumerStatefulWidget {
 
 class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
   bool _hasLoadedCaregivers = false;
+  bool _hasLoadedPhysioData = false;
 
   @override
   void initState() {
     super.initState();
-    // Load caregivers only once
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!_hasLoadedCaregivers) {
         _hasLoadedCaregivers = true;
         ref.read(connectionProvider.notifier).loadMyCaregivers();
+      }
+      if (!_hasLoadedPhysioData) {
+        _hasLoadedPhysioData = true;
+        final user = ref.read(currentUserProvider);
+        final userId = user?.uid ?? 'demo_user';
+        ref.read(physioProvider.notifier).loadAllUserData(userId);
       }
     });
   }
@@ -158,6 +165,9 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
     final profile = ref.watch(userProfileProvider);
     final connectionState = ref.watch(connectionProvider);
     final myCaregivers = connectionState.myCaregivers;
+    final physioState = ref.watch(physioProvider);
+    final todayPlan = physioState.todayPlan;
+    final bmi = physioState.bmiResult;
     final fullName = profile?.name ?? 'Friend';
     final firstName = fullName.split(' ').first;
 
@@ -251,21 +261,29 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
               children: [
                 Expanded(
                   child: _buildStatCard(
-                    icon: Icons.directions_walk,
-                    value: '2,456',
-                    label: 'Steps',
-                    color: AppColors.neonCyan,
-                    progress: 0.65,
+                    icon: Icons.monitor_weight,
+                    value: bmi != null ? bmi.bmi.toStringAsFixed(1) : '--',
+                    label: bmi?.displayCategory ?? 'BMI',
+                    color: bmi != null
+                        ? (bmi.category == 'normal'
+                            ? AppColors.neonGreen
+                            : bmi.category == 'overweight'
+                                ? AppColors.neonOrange
+                                : AppColors.neonRed)
+                        : AppColors.neonCyan,
+                    progress: bmi != null ? (bmi.bmi / 40).clamp(0.0, 1.0) : 0.0,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildStatCard(
-                    icon: Icons.water_drop,
-                    value: '6/8',
-                    label: 'Glasses',
-                    color: AppColors.neonBlue,
-                    progress: 0.75,
+                    icon: Icons.fitness_center,
+                    value: todayPlan != null
+                        ? '${todayPlan.completedExerciseCount}/${todayPlan.exerciseCount}'
+                        : '0/0',
+                    label: 'Exercises',
+                    color: AppColors.neonGreen,
+                    progress: todayPlan?.progress ?? 0.0,
                   ),
                 ),
               ],
@@ -277,21 +295,33 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
               children: [
                 Expanded(
                   child: _buildStatCard(
-                    icon: Icons.favorite,
-                    value: '72',
-                    label: 'Heart Rate',
-                    color: AppColors.neonRed,
-                    progress: 0.9,
+                    icon: Icons.timer,
+                    value: todayPlan != null
+                        ? '${todayPlan.totalDurationMinutes}'
+                        : '--',
+                    label: 'Plan (min)',
+                    color: AppColors.neonCyan,
+                    progress: todayPlan != null
+                        ? (todayPlan.totalDurationMinutes / 30).clamp(0.0, 1.0)
+                        : 0.0,
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildStatCard(
-                    icon: Icons.fitness_center,
-                    value: '2/3',
-                    label: 'Exercises',
-                    color: AppColors.neonGreen,
-                    progress: 0.66,
+                    icon: Icons.speed,
+                    value: todayPlan?.difficultyDisplay ?? '--',
+                    label: 'Difficulty',
+                    color: AppColors.neonPurple,
+                    progress: todayPlan != null
+                        ? (todayPlan.difficultyLevel == 'easy'
+                            ? 0.33
+                            : todayPlan.difficultyLevel == 'moderate'
+                                ? 0.66
+                                : todayPlan.difficultyLevel == 'challenging'
+                                    ? 1.0
+                                    : 0.15)
+                        : 0.0,
                   ),
                 ),
               ],
@@ -310,41 +340,46 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
             ),
             const SizedBox(height: 12),
             
-            _buildTaskCard(
-              title: 'Morning Exercise',
-              subtitle: '10 min stretching routine',
-              time: '8:00 AM',
-              icon: Icons.accessibility_new,
-              color: AppColors.neonGreen,
-              isCompleted: true,
-            ),
-            const SizedBox(height: 8),
-            _buildTaskCard(
-              title: 'Take Medication',
-              subtitle: 'Blood pressure pills',
-              time: '9:00 AM',
-              icon: Icons.medication,
-              color: AppColors.neonPurple,
-              isCompleted: true,
-            ),
-            const SizedBox(height: 8),
-            _buildTaskCard(
-              title: 'Log Lunch',
-              subtitle: 'Record your meal',
-              time: '12:30 PM',
-              icon: Icons.restaurant,
-              color: AppColors.neonOrange,
-              isCompleted: false,
-            ),
-            const SizedBox(height: 8),
-            _buildTaskCard(
-              title: 'Afternoon Walk',
-              subtitle: '15 min gait exercise',
-              time: '4:00 PM',
-              icon: Icons.directions_walk,
-              color: AppColors.neonCyan,
-              isCompleted: false,
-            ),
+            // Show exercises from today's plan
+            if (todayPlan != null && todayPlan.exercises.isNotEmpty)
+              ...todayPlan.exercises.take(4).map((exercise) {
+                final categoryColors = {
+                  'warm_up': AppColors.neonOrange,
+                  'stretching': AppColors.neonGreen,
+                  'strength': AppColors.neonCyan,
+                  'balance': AppColors.neonPurple,
+                  'cool_down': AppColors.neonBlue,
+                  'breathing': AppColors.neonGreen,
+                };
+                final color = categoryColors[exercise.category] ?? AppColors.neonCyan;
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _buildTaskCard(
+                    title: exercise.name,
+                    subtitle: '${exercise.prescribedSets}x${exercise.prescribedReps} reps · ${exercise.durationDisplay}',
+                    time: exercise.category.replaceAll('_', ' '),
+                    icon: Icons.fitness_center,
+                    color: color,
+                    isCompleted: todayPlan.completed,
+                  ),
+                );
+              })
+            else if (todayPlan == null && !physioState.isLoading)
+              _buildTaskCard(
+                title: 'No plan yet',
+                subtitle: 'Set up your profile to get a personalized plan',
+                time: '',
+                icon: Icons.info_outline,
+                color: AppColors.textSecondary,
+                isCompleted: false,
+              )
+            else if (physioState.isLoading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: CircularProgressIndicator(color: AppColors.neonGreen),
+                ),
+              ),
             
             const SizedBox(height: 24),
             
@@ -895,11 +930,37 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
 
 // ============= My Physio Tab =============
 
-class _MyPhysioTab extends StatelessWidget {
+class _MyPhysioTab extends ConsumerStatefulWidget {
   const _MyPhysioTab();
 
   @override
+  ConsumerState<_MyPhysioTab> createState() => _MyPhysioTabState();
+}
+
+class _MyPhysioTabState extends ConsumerState<_MyPhysioTab> {
+  bool _hasLoadedData = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasLoadedData) {
+        _hasLoadedData = true;
+        final user = ref.read(currentUserProvider);
+        final userId = user?.uid ?? 'demo_user';
+        ref.read(physioProvider.notifier).loadTodayPlan(userId);
+        ref.read(physioProvider.notifier).loadBMI(userId);
+      }
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final physioState = ref.watch(physioProvider);
+    final todayPlan = physioState.todayPlan;
+    final bmi = physioState.bmiResult;
+    final patientProfile = physioState.patientProfile;
+
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -925,57 +986,221 @@ class _MyPhysioTab extends StatelessWidget {
             
             const SizedBox(height: 24),
             
-            // Fall Risk Card
-            _buildFallRiskCard(),
+            // BMI Card (real data)
+            if (bmi != null) _buildBMICard(bmi),
+            if (bmi != null) const SizedBox(height: 20),
             
-            const SizedBox(height: 20),
+            // Today's Plan Summary
+            if (todayPlan != null) _buildTodayPlanSummary(todayPlan),
+            if (todayPlan != null) const SizedBox(height: 20),
             
             // Today's Exercises
-            const Text(
-              'Today\'s Exercises',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
-              ),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'Today\'s Exercises',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textPrimary,
+                  ),
+                ),
+                if (todayPlan != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppColors.neonGreen.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${todayPlan.exerciseCount} exercises',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: AppColors.neonGreen,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
             ),
             const SizedBox(height: 12),
             
-            _buildExerciseCard(
-              name: 'Morning Stretch',
-              duration: '10 min',
-              difficulty: 'Easy',
-              isCompleted: true,
-              color: AppColors.neonGreen,
-            ),
-            const SizedBox(height: 8),
-            _buildExerciseCard(
-              name: 'Balance Training',
-              duration: '15 min',
-              difficulty: 'Medium',
-              isCompleted: true,
-              color: AppColors.neonCyan,
-            ),
-            const SizedBox(height: 8),
-            _buildExerciseCard(
-              name: 'Gait Practice',
-              duration: '20 min',
-              difficulty: 'Medium',
-              isCompleted: false,
-              color: AppColors.neonPurple,
-            ),
+            if (physioState.isLoading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(20),
+                  child: CircularProgressIndicator(color: AppColors.neonGreen),
+                ),
+              )
+            else if (todayPlan != null && todayPlan.exercises.isNotEmpty)
+              ...todayPlan.exercises.map((exercise) {
+                final categoryColors = {
+                  'warm_up': AppColors.neonOrange,
+                  'stretching': AppColors.neonGreen,
+                  'strength': AppColors.neonCyan,
+                  'balance': AppColors.neonPurple,
+                  'cool_down': AppColors.neonBlue,
+                  'breathing': AppColors.neonGreen,
+                };
+                final color = categoryColors[exercise.category] ?? AppColors.neonCyan;
+                final isDone = todayPlan.isExerciseCompleted(exercise.exerciseId);
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _buildExerciseCard(
+                    name: exercise.name,
+                    duration: exercise.durationDisplay,
+                    difficulty: exercise.difficulty.replaceAll('_', ' '),
+                    isCompleted: isDone,
+                    color: color,
+                    reps: '${exercise.prescribedSets}x${exercise.prescribedReps}',
+                    notes: exercise.notes,
+                    exerciseId: exercise.exerciseId,
+                    targetReps: exercise.prescribedReps,
+                    targetSets: exercise.prescribedSets,
+                    instructions: exercise.instructions,
+                    planId: todayPlan.planId,
+                  ),
+                );
+              })
+            else
+              GlassmorphicCard(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  children: [
+                    Icon(Icons.fitness_center, size: 48, color: AppColors.textSecondary.withOpacity(0.4)),
+                    const SizedBox(height: 12),
+                    const Text(
+                      'No exercise plan yet',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Complete your health profile to get a personalized plan',
+                      style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 16),
+                    ElevatedButton.icon(
+                      onPressed: physioState.isLoading ? null : () async {
+                        // Check if profile is complete
+                        if (patientProfile == null || !patientProfile.profileComplete) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: const Text('⚠️ Please complete your physio profile first'),
+                              backgroundColor: Colors.orange,
+                              action: SnackBarAction(
+                                label: 'Setup', 
+                                textColor: Colors.white,
+                                onPressed: () => Navigator.pushNamed(context, AppRoutes.physioProfileSetup),
+                              ),
+                            ),
+                          );
+                          return;
+                        }
+                        
+                        final user = ref.read(currentUserProvider);
+                        final userId = user?.uid ?? 'demo_user';
+                        
+                        // Show generating message
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(
+                            content: Row(
+                              children: [
+                                SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                ),
+                                SizedBox(width: 12),
+                                Text('Generating personalized plan...'),
+                              ],
+                            ),
+                            backgroundColor: AppColors.neonCyan,
+                            duration: Duration(seconds: 2),
+                          ),
+                        );
+                        
+                        await ref.read(physioProvider.notifier).generatePlan(userId);
+                        
+                        // Check result and show feedback
+                        final newState = ref.read(physioProvider);
+                        if (mounted) {
+                          if (newState.error != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('Error: ${newState.error}'),
+                                backgroundColor: Colors.redAccent,
+                              ),
+                            );
+                          } else if (newState.todayPlan != null) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text('✨ Generated ${newState.todayPlan!.exercises.length} exercises!'),
+                                backgroundColor: AppColors.neonGreen,
+                              ),
+                            );
+                          }
+                        }
+                      },
+                      icon: physioState.isLoading 
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black),
+                            )
+                          : const Icon(Icons.auto_fix_high, size: 18),
+                      label: Text(physioState.isLoading ? 'Generating...' : 'Generate Plan'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.neonGreen,
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             
             const SizedBox(height: 24),
             
-            // Quick Actions
+            // Quick Actions 
             Row(
               children: [
                 Expanded(
                   child: _buildPhysioAction(
-                    icon: Icons.bar_chart,
-                    label: 'View\nProgress',
+                    icon: Icons.auto_fix_high,
+                    label: 'New\nPlan',
                     color: AppColors.neonPurple,
-                    onTap: () {},
+                    onTap: physioState.isLoading ? () {} : () async {
+                      if (patientProfile == null || !patientProfile.profileComplete) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text('⚠️ Please complete your physio profile first'),
+                            backgroundColor: Colors.orange,
+                            action: SnackBarAction(
+                              label: 'Setup',
+                              textColor: Colors.white,
+                              onPressed: () => Navigator.pushNamed(context, AppRoutes.physioProfileSetup),
+                            ),
+                          ),
+                        );
+                        return;
+                      }
+                      
+                      final user = ref.read(currentUserProvider);
+                      final userId = user?.uid ?? 'demo_user';
+                      await ref.read(physioProvider.notifier).generatePlan(userId);
+                      
+                      final newState = ref.read(physioProvider);
+                      if (mounted && newState.todayPlan != null) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text('✨ Generated ${newState.todayPlan!.exercises.length} exercises!'),
+                            backgroundColor: AppColors.neonGreen,
+                          ),
+                        );
+                      }
+                    },
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -984,51 +1209,146 @@ class _MyPhysioTab extends StatelessWidget {
                     icon: Icons.fitness_center,
                     label: 'Start\nExercise',
                     color: AppColors.neonCyan,
-                    onTap: () {},
+                    onTap: todayPlan != null && todayPlan.exercises.isNotEmpty
+                        ? () {
+                            // Navigate to first incomplete exercise
+                            final firstIncomplete = todayPlan.exercises.firstWhere(
+                              (e) => !todayPlan.completed,
+                              orElse: () => todayPlan.exercises.first,
+                            );
+                            Navigator.pushNamed(
+                              context,
+                              AppRoutes.exerciseMonitor,
+                              arguments: {
+                                'exerciseName': firstIncomplete.name,
+                                'exerciseType': firstIncomplete.exerciseId,
+                                'targetReps': firstIncomplete.prescribedReps,
+                                'targetSets': firstIncomplete.prescribedSets,
+                                'instructions': firstIncomplete.instructions,
+                              },
+                            );
+                          }
+                        : () => Navigator.pushNamed(context, AppRoutes.exercises),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: _buildPhysioAction(
-                    icon: Icons.history,
-                    label: 'Activity\nHistory',
+                    icon: Icons.check_circle,
+                    label: 'Mark\nDone',
                     color: AppColors.neonGreen,
-                    onTap: () {},
+                    onTap: todayPlan != null && !todayPlan.completed
+                        ? () {
+                            ref.read(physioProvider.notifier).completePlan(todayPlan.planId);
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              const SnackBar(
+                                content: Text('\u{1F389} Great job! Plan marked as completed!'),
+                                backgroundColor: AppColors.neonGreen,
+                              ),
+                            );
+                          }
+                        : () {},
                   ),
                 ),
               ],
             ),
+            const SizedBox(height: 12),
+            // Physio Profile Setup button
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => Navigator.pushNamed(context, AppRoutes.physioProfileSetup),
+                icon: const Icon(Icons.assignment_ind, size: 18),
+                label: Text(
+                  patientProfile != null && patientProfile.profileComplete
+                      ? 'Edit Physio Profile'
+                      : 'Setup Physio Profile',
+                ),
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: AppColors.neonPurple),
+                  foregroundColor: AppColors.neonPurple,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
             
             const SizedBox(height: 24),
             
-            // Recent Activity
-            const Text(
-              'Recent Activity',
-              style: TextStyle(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textPrimary,
+            // Plan Notes
+            if (todayPlan != null && todayPlan.additionalNotes.isNotEmpty) ...[
+              const Text(
+                'Plan Notes',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.textPrimary,
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
+              const SizedBox(height: 12),
+              ...todayPlan.additionalNotes.map((note) => 
+                _buildActivityItem(note, '', Icons.info_outline, AppColors.neonCyan),
+              ),
+            ],
             
-            _buildActivityItem('Completed gait analysis', '2 hours ago', Icons.check_circle, AppColors.neonGreen),
-            _buildActivityItem('TUG test score: 12s', 'Yesterday', Icons.timer, AppColors.neonCyan),
-            _buildActivityItem('Balance improved 5%', '2 days ago', Icons.trending_up, AppColors.neonPurple),
+            // Pain Adaptation Alert
+            if (todayPlan != null && todayPlan.adaptedForPain) ...[
+              const SizedBox(height: 16),
+              GlassmorphicCard(
+                glowColor: AppColors.neonOrange,
+                glowIntensity: 0.15,
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  children: [
+                    const Icon(Icons.healing, color: AppColors.neonOrange, size: 24),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Pain-Adapted Plan',
+                            style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.neonOrange,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            todayPlan.painAdaptationNotes.isNotEmpty 
+                                ? todayPlan.painAdaptationNotes 
+                                : 'Exercises adjusted based on your recent pain levels',
+                            style: const TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
       ),
     );
   }
 
-  Widget _buildFallRiskCard() {
+  Widget _buildBMICard(BMIResult bmi) {
+    final bmiColor = bmi.category == 'normal'
+        ? AppColors.neonGreen
+        : bmi.category == 'overweight'
+            ? AppColors.neonOrange
+            : bmi.category == 'underweight'
+                ? AppColors.neonCyan
+                : AppColors.neonRed;
+
     return GlassmorphicCard(
-      glowColor: AppColors.neonGreen,
+      glowColor: bmiColor,
       glowIntensity: 0.2,
       padding: const EdgeInsets.all(20),
       child: Row(
         children: [
-          // Circular progress indicator
           SizedBox(
             width: 80,
             height: 80,
@@ -1039,25 +1359,25 @@ class _MyPhysioTab extends StatelessWidget {
                   width: 80,
                   height: 80,
                   child: CircularProgressIndicator(
-                    value: 0.25,
+                    value: (bmi.bmi / 40).clamp(0.0, 1.0),
                     strokeWidth: 8,
-                    backgroundColor: AppColors.neonGreen.withOpacity(0.1),
-                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.neonGreen),
+                    backgroundColor: bmiColor.withOpacity(0.1),
+                    valueColor: AlwaysStoppedAnimation<Color>(bmiColor),
                   ),
                 ),
-                const Column(
+                Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '25',
+                      bmi.bmi.toStringAsFixed(1),
                       style: TextStyle(
-                        fontSize: 24,
+                        fontSize: 22,
                         fontWeight: FontWeight.bold,
-                        color: AppColors.neonGreen,
+                        color: bmiColor,
                       ),
                     ),
-                    Text(
-                      'Low',
+                    const Text(
+                      'BMI',
                       style: TextStyle(
                         fontSize: 10,
                         color: AppColors.textSecondary,
@@ -1073,42 +1393,160 @@ class _MyPhysioTab extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'Fall Risk Score',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: const Text(
+                        'Body Mass Index',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.textPrimary,
+                        ),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: bmiColor.withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        bmi.displayCategory,
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                          color: bmiColor,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 4),
-                const Text(
-                  'Your mobility is looking good!',
-                  style: TextStyle(
+                Text(
+                  'Health Risk: ${bmi.healthRisk}',
+                  style: const TextStyle(
                     fontSize: 13,
                     color: AppColors.textSecondary,
                   ),
                 ),
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppColors.neonGreen.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Text(
-                    'Last updated: Today',
+                if (bmi.recommendations.isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    bmi.recommendations.first,
                     style: TextStyle(
                       fontSize: 11,
-                      color: AppColors.neonGreen,
+                      color: bmiColor.withOpacity(0.8),
                     ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                ),
+                ],
               ],
             ),
           ),
         ],
       ),
+    );
+  }
+
+  Widget _buildTodayPlanSummary(DailyExercisePlan plan) {
+    return GlassmorphicCard(
+      glowColor: plan.completed ? AppColors.neonGreen : AppColors.neonCyan,
+      glowIntensity: 0.2,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                plan.completed ? Icons.check_circle : Icons.today,
+                color: plan.completed ? AppColors.neonGreen : AppColors.neonCyan,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  plan.completed ? 'Today\'s Plan Completed!' : 'Today\'s Exercise Plan',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                    color: plan.completed ? AppColors.neonGreen : AppColors.textPrimary,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: (plan.completed ? AppColors.neonGreen : AppColors.neonCyan).withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  plan.difficultyDisplay,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: plan.completed ? AppColors.neonGreen : AppColors.neonCyan,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildPlanStat('Exercises', '${plan.exerciseCount}', AppColors.neonCyan),
+              _buildPlanStat('Duration', '${plan.totalDurationMinutes} min', AppColors.neonGreen),
+              _buildPlanStat('Areas', plan.focusAreas.isNotEmpty ? '${plan.focusAreas.length}' : '0', AppColors.neonPurple),
+            ],
+          ),
+          if (plan.focusAreas.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: plan.focusAreas.take(4).map((area) => Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: AppColors.surfaceLight,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.glassBorder),
+                ),
+                child: Text(
+                  area.replaceAll('_', ' '),
+                  style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                ),
+              )).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlanStat(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: color,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 11,
+            color: AppColors.textSecondary,
+          ),
+        ),
+      ],
     );
   }
 
@@ -1118,76 +1556,139 @@ class _MyPhysioTab extends StatelessWidget {
     required String difficulty,
     required bool isCompleted,
     required Color color,
+    String reps = '',
+    String notes = '',
+    String? exerciseId,
+    int? targetReps,
+    int? targetSets,
+    List<String>? instructions,
+    String? planId,
   }) {
-    return GlassmorphicCard(
-      padding: const EdgeInsets.all(14),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.15),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(Icons.fitness_center, color: color),
-          ),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  name,
-                  style: TextStyle(
-                    fontSize: 15,
-                    fontWeight: FontWeight.w600,
-                    color: isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
-                    decoration: isCompleted ? TextDecoration.lineThrough : null,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Icon(Icons.timer_outlined, size: 14, color: AppColors.textSecondary),
-                    const SizedBox(width: 4),
-                    Text(duration, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
-                    const SizedBox(width: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: color.withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        difficulty,
-                        style: TextStyle(fontSize: 10, color: color),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-          if (isCompleted)
-            const Icon(Icons.check_circle, color: AppColors.neonGreen, size: 24)
-          else
+    return GestureDetector(
+      onTap: isCompleted ? null : () {
+        if (exerciseId != null && targetReps != null && targetSets != null) {
+          // Navigate to exercise monitor with this specific exercise
+          Navigator.pushNamed(
+            context,
+            AppRoutes.exerciseMonitor,
+            arguments: {
+              'exerciseName': name,
+              'exerciseType': exerciseId,
+              'targetReps': targetReps,
+              'targetSets': targetSets,
+              'instructions': instructions,
+            },
+          );
+        } else {
+          // Fallback to exercise library
+          Navigator.pushNamed(context, AppRoutes.exercises);
+        }
+      },
+      child: GlassmorphicCard(
+        padding: const EdgeInsets.all(14),
+        child: Row(
+          children: [
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              width: 48,
+              height: 48,
               decoration: BoxDecoration(
                 color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(16),
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: Text(
-                'Start',
-                style: TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: color,
-                ),
+              child: Icon(Icons.fitness_center, color: color),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    name,
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: isCompleted ? AppColors.textSecondary : AppColors.textPrimary,
+                      decoration: isCompleted ? TextDecoration.lineThrough : null,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      const Icon(Icons.timer_outlined, size: 14, color: AppColors.textSecondary),
+                      const SizedBox(width: 4),
+                      Text(duration, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                      if (reps.isNotEmpty) ...[
+                        const SizedBox(width: 8),
+                        Text(reps, style: const TextStyle(fontSize: 12, color: AppColors.textSecondary)),
+                      ],
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: color.withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          difficulty,
+                          style: TextStyle(fontSize: 10, color: color),
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (notes.isNotEmpty) ...[
+                    const SizedBox(height: 4),
+                    Text(
+                      notes,
+                      style: const TextStyle(fontSize: 10, color: AppColors.textSecondary),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ],
               ),
             ),
-        ],
+            if (isCompleted)
+              const Icon(Icons.check_circle, color: AppColors.neonGreen, size: 24)
+            else
+              GestureDetector(
+                onTap: () {
+                  if (planId != null && exerciseId != null) {
+                    ref.read(physioProvider.notifier).completeExerciseInPlan(planId, exerciseId);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('\u2705 $name marked as done!'),
+                        backgroundColor: AppColors.neonGreen,
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: color.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: color.withOpacity(0.3)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check, size: 14, color: color),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Done',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: color,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
@@ -1245,13 +1746,14 @@ class _MyPhysioTab extends StatelessWidget {
               ),
             ),
           ),
-          Text(
-            time,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppColors.textSecondary,
+          if (time.isNotEmpty)
+            Text(
+              time,
+              style: const TextStyle(
+                fontSize: 12,
+                color: AppColors.textSecondary,
+              ),
             ),
-          ),
         ],
       ),
     );

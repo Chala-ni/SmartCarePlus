@@ -4,15 +4,19 @@
 /// Main dashboard for guardian monitoring elderly
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
+import '../../providers/connection_provider.dart';
 
-class GuardianHomeScreen extends StatelessWidget {
+class GuardianHomeScreen extends ConsumerWidget {
   const GuardianHomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final connectionState = ref.watch(connectionProvider);
+    final connectedElderly = connectionState.myElderly;
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -125,9 +129,46 @@ class GuardianHomeScreen extends StatelessWidget {
                 const Text('Monitored Elderly', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
                 const SizedBox(height: 12),
                 
-                _buildElderlyCard('Margaret Johnson', 'Living Room', 'Active', AppColors.neonGreen, '2 min ago'),
-                const SizedBox(height: 10),
-                _buildElderlyCard('Robert Smith', 'Bedroom', 'Resting', AppColors.neonCyan, '15 min ago'),
+                // Dynamic elderly cards from connected elderly
+                if (connectedElderly.isEmpty)
+                  GlassmorphicCard(
+                    padding: const EdgeInsets.all(20),
+                    child: Center(
+                      child: Column(
+                        children: [
+                          Icon(Icons.person_add_outlined, size: 48, color: AppColors.textSecondary.withOpacity(0.5)),
+                          const SizedBox(height: 12),
+                          const Text(
+                            'No elderly connected',
+                            style: TextStyle(color: AppColors.textSecondary, fontSize: 14),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Go to Connections to link with elderly',
+                            style: TextStyle(color: AppColors.textSecondary.withOpacity(0.7), fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else
+                  ...connectedElderly.asMap().entries.map((entry) {
+                    final index = entry.key;
+                    final elderly = entry.value;
+                    final locations = ['Living Room', 'Bedroom', 'Kitchen', 'Garden'];
+                    final statuses = [('Active', AppColors.neonGreen), ('Resting', AppColors.neonCyan), ('Active', AppColors.neonGreen)];
+                    final times = ['2 min ago', '15 min ago', '5 min ago'];
+                    return Padding(
+                      padding: EdgeInsets.only(bottom: index < connectedElderly.length - 1 ? 10 : 0),
+                      child: _buildElderlyCard(
+                        elderly.name,
+                        locations[index % locations.length],
+                        statuses[index % statuses.length].$1,
+                        statuses[index % statuses.length].$2,
+                        times[index % times.length],
+                      ),
+                    );
+                  }),
                 
                 const SizedBox(height: 24),
                 

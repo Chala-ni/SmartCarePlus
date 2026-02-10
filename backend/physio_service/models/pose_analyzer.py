@@ -100,6 +100,7 @@ class JointType(Enum):
 
 class ExerciseType(Enum):
     """Supported exercise types."""
+    # Original trackable exercises (with pose analysis)
     CHAIR_STAND = "chair_stand"
     HEEL_TOE_WALK = "heel_toe_walk"
     SINGLE_LEG_STAND = "single_leg_stand"
@@ -110,6 +111,28 @@ class ExerciseType(Enum):
     LEG_RAISE = "leg_raise"
     ARM_RAISE = "arm_raise"
     SQUAT = "squat"
+    
+    # Additional exercises (basic tracking or instruction-based)
+    NECK_ROTATIONS = "neck_rotations"
+    SHOULDER_ROLLS = "shoulder_rolls"
+    SEATED_HAMSTRING_STRETCH = "seated_hamstring_stretch"
+    SEATED_HIP_STRETCH = "seated_hip_stretch"
+    CALF_STRETCH = "calf_stretch"
+    SEATED_LEG_RAISE = "seated_leg_raise"
+    SEATED_ARM_RAISES = "seated_arm_raises"
+    DEEP_BREATHING = "deep_breathing"
+    GENTLE_SPINAL_TWIST = "gentle_spinal_twist"
+    MARCHING_IN_PLACE = "marching_in_place"
+    
+    @classmethod
+    def is_trackable(cls, exercise_type: 'ExerciseType') -> bool:
+        """Check if exercise type supports full pose tracking."""
+        trackable = {
+            cls.CHAIR_STAND, cls.WALL_PUSHUP, cls.LEG_RAISE, cls.ARM_RAISE,
+            cls.SQUAT, cls.MARCHING, cls.ANKLE_CIRCLES, cls.SEATED_LEG_RAISE,
+            cls.SEATED_ARM_RAISES, cls.SHOULDER_ROLLS
+        }
+        return exercise_type in trackable
 
 
 class FormQuality(Enum):
@@ -265,6 +288,46 @@ class PoseAnalyzer:
             "hip_alignment": (-10, 10),  # deviation in degrees
         },
         ExerciseType.MARCHING: {
+            "knee_lift_min": 70,
+            "knee_lift_max": 110,
+            "rep_up": 100,
+            "rep_down": 150,
+        },
+        # Additional exercise thresholds (basic/simple tracking)
+        ExerciseType.SHOULDER_ROLLS: {
+            "shoulder_angle_range": (0, 180),
+            "rep_up": 90,
+            "rep_down": 30,
+        },
+        ExerciseType.NECK_ROTATIONS: {
+            "head_angle_range": (-45, 45),
+            "rep_up": 30,
+            "rep_down": 0,
+        },
+        ExerciseType.SEATED_LEG_RAISE: {
+            "hip_angle_up": (60, 100),
+            "hip_angle_down": (160, 180),
+            "knee_straight": (160, 180),
+            "rep_up": 120,
+            "rep_down": 160,
+        },
+        ExerciseType.SEATED_ARM_RAISES: {
+            "shoulder_angle_up": (150, 180),
+            "shoulder_angle_down": (0, 30),
+            "rep_up": 140,
+            "rep_down": 40,
+        },
+        ExerciseType.DEEP_BREATHING: {
+            # No pose tracking needed - timer-based
+            "rep_up": 0,
+            "rep_down": 0,
+        },
+        ExerciseType.GENTLE_SPINAL_TWIST: {
+            "trunk_rotation": (-45, 45),
+            "rep_up": 30,
+            "rep_down": 0,
+        },
+        ExerciseType.MARCHING_IN_PLACE: {
             "knee_lift_min": 70,
             "knee_lift_max": 110,
             "rep_up": 100,
@@ -669,7 +732,9 @@ class PoseAnalyzer:
     MIN_VISIBILITY = 0.5
     
     # Required landmarks per exercise type (must be visible for reliable analysis)
+    # This determines what body parts need to be in frame for each exercise
     REQUIRED_LANDMARKS = {
+        # ─── FULL BODY EXERCISES ───
         ExerciseType.CHAIR_STAND: [
             JointType.LEFT_HIP, JointType.RIGHT_HIP,
             JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
@@ -680,11 +745,59 @@ class PoseAnalyzer:
             JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
             JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
         ],
+        ExerciseType.SINGLE_LEG_STAND: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.TANDEM_STAND: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.HEEL_TOE_WALK: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.MARCHING: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        ExerciseType.MARCHING_IN_PLACE: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        
+        # ─── LOWER BODY EXERCISES ───
         ExerciseType.LEG_RAISE: [
             JointType.LEFT_HIP, JointType.RIGHT_HIP,
             JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
         ],
+        ExerciseType.SEATED_LEG_RAISE: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        ExerciseType.ANKLE_CIRCLES: [
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.CALF_STRETCH: [
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ],
+        ExerciseType.SEATED_HAMSTRING_STRETCH: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        ExerciseType.SEATED_HIP_STRETCH: [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        ],
+        
+        # ─── UPPER BODY EXERCISES ───
         ExerciseType.ARM_RAISE: [
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
+            JointType.LEFT_ELBOW, JointType.RIGHT_ELBOW,
+        ],
+        ExerciseType.SEATED_ARM_RAISES: [
             JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
             JointType.LEFT_ELBOW, JointType.RIGHT_ELBOW,
         ],
@@ -693,22 +806,25 @@ class PoseAnalyzer:
             JointType.LEFT_ELBOW, JointType.RIGHT_ELBOW,
             JointType.LEFT_WRIST, JointType.RIGHT_WRIST,
         ],
-        ExerciseType.SINGLE_LEG_STAND: [
-            JointType.LEFT_HIP, JointType.RIGHT_HIP,
-            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
-            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ExerciseType.SHOULDER_ROLLS: [
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
         ],
-        ExerciseType.MARCHING: [
-            JointType.LEFT_HIP, JointType.RIGHT_HIP,
-            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+        
+        # ─── NECK/HEAD EXERCISES (only upper body needed) ───
+        ExerciseType.NECK_ROTATIONS: [
+            JointType.NOSE,
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
         ],
-        ExerciseType.TANDEM_STAND: [
-            JointType.LEFT_HIP, JointType.RIGHT_HIP,
-            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        
+        # ─── BREATHING EXERCISES (just need to see posture) ───
+        ExerciseType.DEEP_BREATHING: [
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
         ],
-        ExerciseType.ANKLE_CIRCLES: [
-            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
-            JointType.LEFT_FOOT_INDEX, JointType.RIGHT_FOOT_INDEX,
+        
+        # ─── TRUNK EXERCISES ───
+        ExerciseType.GENTLE_SPINAL_TWIST: [
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
         ],
     }
     
@@ -719,9 +835,9 @@ class PoseAnalyzer:
         Returns:
             (is_visible, list of missing landmark names)
         """
+        # Default to just shoulders for unknown exercises (most lenient)
         required = self.REQUIRED_LANDMARKS.get(exercise, [
-            JointType.LEFT_HIP, JointType.RIGHT_HIP,
-            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
         ])
         
         missing = []
@@ -733,6 +849,39 @@ class PoseAnalyzer:
         
         is_visible = len(missing) == 0
         return is_visible, missing
+    
+    def _get_visibility_feedback(self, exercise: ExerciseType, missing: List[str]) -> str:
+        """Generate exercise-specific visibility feedback message."""
+        # Determine what body parts are needed based on exercise
+        required = self.REQUIRED_LANDMARKS.get(exercise, [])
+        
+        # Check which body regions are missing
+        needs_upper = any(j in required for j in [
+            JointType.NOSE, JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER,
+            JointType.LEFT_ELBOW, JointType.RIGHT_ELBOW,
+            JointType.LEFT_WRIST, JointType.RIGHT_WRIST,
+        ])
+        needs_lower = any(j in required for j in [
+            JointType.LEFT_HIP, JointType.RIGHT_HIP,
+            JointType.LEFT_KNEE, JointType.RIGHT_KNEE,
+            JointType.LEFT_ANKLE, JointType.RIGHT_ANKLE,
+        ])
+        
+        # Generate appropriate feedback
+        if needs_upper and needs_lower:
+            return "Position your full body in the camera"
+        elif needs_lower:
+            return "Position your hips and legs in the camera"
+        elif needs_upper:
+            # Check if it's just face/neck
+            just_face = all(j in [JointType.NOSE, JointType.LEFT_EAR, JointType.RIGHT_EAR,
+                                   JointType.LEFT_SHOULDER, JointType.RIGHT_SHOULDER]
+                           for j in required)
+            if just_face:
+                return "Position your face and shoulders in the camera"
+            return "Position your upper body in the camera"
+        else:
+            return "Adjust your position in the camera"
     
     def assess_form(self, pose: PoseResult, exercise: ExerciseType) -> FormAssessment:
         """
@@ -751,12 +900,14 @@ class PoseAnalyzer:
             logger.debug(
                 f"  ⚠️ Insufficient visibility for {exercise.value}: missing {missing}"
             )
+            # Generate exercise-specific feedback
+            feedback_msg = self._get_visibility_feedback(exercise, missing)
             return FormAssessment(
                 exercise_type=exercise,
                 quality=FormQuality.POOR,
                 score=0.0,
                 joint_angles=[],
-                feedback=["Position your full body in camera view"],
+                feedback=[feedback_msg],
                 timestamp=pose.timestamp
             )
         
@@ -923,6 +1074,189 @@ class PoseAnalyzer:
             else:
                 feedback.append("Good stability while circling ✓")
         
+        elif exercise == ExerciseType.NECK_ROTATIONS:
+            # Neck rotation assessment — check posture and head alignment
+            # Head tilt is computed from nose vs shoulder midpoint
+            head_tilt = angles.get("head_tilt", 0)
+            
+            # Posture check — shoulders should stay level
+            shoulder_diff = abs(angles.get("left_shoulder", 0) - angles.get("right_shoulder", 0))
+            if shoulder_diff > 15:
+                feedback.append(f"Keep shoulders level (diff {shoulder_diff:.0f}°)")
+                total_score -= 10
+            
+            # Trunk stability
+            if trunk > 15:
+                feedback.append(f"Keep body still — swaying {trunk:.0f}°")
+                total_score -= 10
+            
+            # Dynamic feedback based on head position
+            if abs(head_tilt) < 10:
+                feedback.append("Head centered ✓")
+            elif head_tilt > 30:
+                feedback.append(f"Good right rotation ({head_tilt:.0f}°)")
+            elif head_tilt < -30:
+                feedback.append(f"Good left rotation ({abs(head_tilt):.0f}°)")
+            else:
+                feedback.append(f"Rotate head slowly ({abs(head_tilt):.0f}°)")
+        
+        elif exercise == ExerciseType.SHOULDER_ROLLS:
+            # Shoulder roll assessment — check shoulder elevation and symmetry
+            left_shoulder = angles.get("left_shoulder", 0)
+            right_shoulder = angles.get("right_shoulder", 0)
+            shoulder_diff = abs(left_shoulder - right_shoulder)
+            
+            # Symmetry check
+            if shoulder_diff > 20:
+                feedback.append(f"Roll shoulders evenly (diff {shoulder_diff:.0f}°)")
+                total_score -= 10
+            else:
+                feedback.append("Shoulders moving symmetrically ✓")
+            
+            # Trunk stability
+            if trunk > 15:
+                feedback.append(f"Keep body still — swaying {trunk:.0f}°")
+                total_score -= 8
+            
+            # Check smooth rolling motion
+            feedback.append(f"Shoulder angles: L={left_shoulder:.0f}° R={right_shoulder:.0f}°")
+        
+        elif exercise == ExerciseType.HEEL_TOE_WALK:
+            # Heel-toe walking assessment — check step pattern and balance
+            if knee_diff > 25:
+                feedback.append(f"Uneven steps (diff {knee_diff:.0f}°)")
+                total_score -= 15
+            else:
+                feedback.append("Good step rhythm ✓")
+            
+            if trunk > 20:
+                feedback.append(f"Keep body upright — tilting {trunk:.0f}°")
+                total_score -= 10
+            
+            if hip_diff > 15:
+                feedback.append(f"Hips swaying (diff {hip_diff:.0f}°) — keep stable")
+                total_score -= 8
+            else:
+                feedback.append("Good hip stability ✓")
+        
+        elif exercise == ExerciseType.SEATED_HAMSTRING_STRETCH:
+            # Seated hamstring stretch — check forward lean
+            if avg_hip < 60:
+                feedback.append("Great stretch depth! Hold gently")
+            elif avg_hip < 80:
+                feedback.append(f"Good forward lean ({avg_hip:.0f}°)")
+            else:
+                feedback.append(f"Lean forward more (currently {avg_hip:.0f}°)")
+                total_score -= 10
+            
+            # Keep legs straight
+            if avg_knee > 160:
+                feedback.append("Legs nice and straight ✓")
+            else:
+                feedback.append(f"Straighten legs more ({avg_knee:.0f}°)")
+                total_score -= 8
+        
+        elif exercise == ExerciseType.SEATED_HIP_STRETCH:
+            # Seated hip stretch — check cross-leg position
+            if trunk > 25:
+                feedback.append(f"Sit taller — leaning {trunk:.0f}°")
+                total_score -= 10
+            else:
+                feedback.append("Good upright posture ✓")
+            
+            feedback.append("Cross ankle over knee, lean gently forward")
+        
+        elif exercise == ExerciseType.CALF_STRETCH:
+            # Calf stretch — check back leg position
+            if trunk > 20:
+                feedback.append(f"Keep body straight — tilting {trunk:.0f}°")
+                total_score -= 10
+            else:
+                feedback.append("Good body alignment ✓")
+            
+            # Check back leg is straight
+            if avg_knee > 160:
+                feedback.append("Back leg straight ✓")
+            else:
+                feedback.append("Straighten back leg for deeper stretch")
+                total_score -= 5
+            
+            feedback.append("Press heel down, feel calf stretch")
+        
+        elif exercise == ExerciseType.SEATED_LEG_RAISE:
+            # Seated leg raise — check leg extension
+            left_knee = angles.get("left_knee", 90)
+            right_knee = angles.get("right_knee", 90)
+            
+            # Check if one leg is extended
+            if left_knee > 150 or right_knee > 150:
+                extending = "left" if left_knee > right_knee else "right"
+                feedback.append(f"Good {extending} leg extension ✓")
+            else:
+                feedback.append("Extend leg fully, hold briefly")
+            
+            if trunk > 20:
+                feedback.append(f"Sit tall — leaning {trunk:.0f}°")
+                total_score -= 8
+        
+        elif exercise == ExerciseType.SEATED_ARM_RAISES:
+            # Seated arm raises — check overhead extension
+            if avg_shoulder > 150:
+                feedback.append("Arms fully raised ✓")
+            elif avg_shoulder > 90:
+                feedback.append(f"Raise arms higher ({avg_shoulder:.0f}°)")
+                total_score -= 5
+            else:
+                feedback.append("Lift arms overhead slowly")
+            
+            shoulder_diff = abs(angles.get("left_shoulder", 0) - angles.get("right_shoulder", 0))
+            if shoulder_diff > 20:
+                feedback.append(f"Raise both arms evenly (diff {shoulder_diff:.0f}°)")
+                total_score -= 10
+            else:
+                feedback.append("Good arm symmetry ✓")
+        
+        elif exercise == ExerciseType.DEEP_BREATHING:
+            # Deep breathing — minimal pose tracking, focus on rhythm
+            if trunk > 15:
+                feedback.append(f"Relax shoulders — slight tension detected")
+                total_score -= 5
+            else:
+                feedback.append("Good relaxed posture ✓")
+            
+            feedback.append("Breathe in slowly... breathe out gently")
+        
+        elif exercise == ExerciseType.GENTLE_SPINAL_TWIST:
+            # Spinal twist — check trunk rotation
+            trunk_rotation = angles.get("trunk_rotation", 0)
+            if abs(trunk_rotation) > 20:
+                direction = "right" if trunk_rotation > 0 else "left"
+                feedback.append(f"Good {direction} twist ({abs(trunk_rotation):.0f}°)")
+            else:
+                feedback.append("Rotate upper body gently")
+            
+            if hip_diff > 15:
+                feedback.append(f"Keep hips still (moving {hip_diff:.0f}°)")
+                total_score -= 10
+            else:
+                feedback.append("Hips stable ✓")
+        
+        elif exercise == ExerciseType.MARCHING_IN_PLACE:
+            # Marching in place — same as regular marching
+            joint_angles.append(JointAngle("avg_hip", avg_hip, 70, 180))
+            
+            for side in ["left", "right"]:
+                hip_angle = angles.get(f"{side}_hip", 180)
+                if hip_angle < 90:
+                    feedback.append(f"Great {side} knee lift ✓")
+                elif hip_angle > 150:
+                    feedback.append(f"Lift {side} knee higher")
+                    total_score -= 8
+            
+            if trunk > 20:
+                feedback.append(f"Stand tall — leaning {trunk:.0f}°")
+                total_score -= 10
+        
         else:
             # Generic assessment for unsupported exercises
             if trunk > 30:
@@ -931,7 +1265,8 @@ class PoseAnalyzer:
             if knee_diff > 20:
                 feedback.append(f"Uneven movement (knee diff {knee_diff:.0f}°)")
                 total_score -= 10
-            feedback.append(f"Knee: {avg_knee:.0f}° | Hip: {avg_hip:.0f}°")
+            # Show exercise-specific guidance instead of raw angles
+            feedback.append("Follow the on-screen guidance")
         
         # Determine quality level
         total_score = max(0, min(100, total_score))

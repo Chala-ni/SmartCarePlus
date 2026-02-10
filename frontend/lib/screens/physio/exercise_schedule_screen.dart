@@ -7,7 +7,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
 import '../../widgets/common/glassmorphic_card.dart';
-import '../../widgets/physio/missed_exercise_alert.dart';
+import '../../widgets/physio/missed_exercise_alert.dart' hide ScheduledExercise;
+import '../../providers/physio_provider.dart';
+import '../../providers/auth_provider.dart';
 
 class ExerciseScheduleScreen extends ConsumerStatefulWidget {
   const ExerciseScheduleScreen({super.key});
@@ -20,60 +22,20 @@ class _ExerciseScheduleScreenState extends ConsumerState<ExerciseScheduleScreen>
     with SingleTickerProviderStateMixin {
   late TabController _tabController;
   DateTime _selectedDate = DateTime.now();
-
-  // Mock schedule data - would come from backend in production
-  final List<ScheduledExercise> _todaySchedule = [
-    ScheduledExercise(
-      id: '1',
-      name: 'Morning Stretches',
-      scheduledTime: '7:00 AM',
-      duration: '10 min',
-      difficulty: 'Easy',
-      status: ExerciseStatus.completed,
-      scheduledDate: DateTime.now().subtract(const Duration(hours: 5)),
-    ),
-    ScheduledExercise(
-      id: '2',
-      name: 'Chair Stand Exercise',
-      scheduledTime: '9:00 AM',
-      duration: '15 min',
-      difficulty: 'Easy',
-      status: ExerciseStatus.missed,
-      scheduledDate: DateTime.now().subtract(const Duration(hours: 3)),
-    ),
-    ScheduledExercise(
-      id: '3',
-      name: 'Balance Training',
-      scheduledTime: '11:00 AM',
-      duration: '10 min',
-      difficulty: 'Medium',
-      status: ExerciseStatus.missed,
-      scheduledDate: DateTime.now().subtract(const Duration(hours: 1)),
-    ),
-    ScheduledExercise(
-      id: '4',
-      name: 'Heel-to-Toe Walk',
-      scheduledTime: '2:00 PM',
-      duration: '10 min',
-      difficulty: 'Medium',
-      status: ExerciseStatus.upcoming,
-      scheduledDate: DateTime.now().add(const Duration(hours: 2)),
-    ),
-    ScheduledExercise(
-      id: '5',
-      name: 'Evening Stretches',
-      scheduledTime: '6:00 PM',
-      duration: '10 min',
-      difficulty: 'Easy',
-      status: ExerciseStatus.upcoming,
-      scheduledDate: DateTime.now().add(const Duration(hours: 6)),
-    ),
-  ];
+  bool _hasLoadedPlan = false;
 
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasLoadedPlan) {
+        _hasLoadedPlan = true;
+        final user = ref.read(currentUserProvider);
+        final userId = user?.uid ?? 'demo_user';
+        ref.read(physioProvider.notifier).loadTodayPlan(userId);
+      }
+    });
   }
 
   @override
@@ -82,14 +44,39 @@ class _ExerciseScheduleScreenState extends ConsumerState<ExerciseScheduleScreen>
     super.dispose();
   }
 
+  // Convert backend planned exercises to local ScheduledExercise format
+  List<ScheduledExercise> _convertPlanToSchedule(DailyExercisePlan? plan) {
+    if (plan == null) return [];
+    return plan.exercises.map((e) {
+      final status = plan.completed
+          ? ScheduleStatus.completed
+          : ScheduleStatus.upcoming;
+      return ScheduledExercise(
+        id: '${e.exerciseId}_${plan.date}',
+        exerciseId: e.exerciseId,
+        name: e.name,
+        scheduledDate: plan.date,
+        scheduledTime: e.category.replaceAll('_', ' '),
+        duration: e.durationDisplay,
+        difficulty: e.difficulty.replaceAll('_', ' '),
+        status: status,
+      );
+    }).toList();
+  }
+
+  List<ScheduledExercise> get _todaySchedule {
+    final plan = ref.read(physioProvider).todayPlan;
+    return _convertPlanToSchedule(plan);
+  }
+
   List<ScheduledExercise> get _missedExercises =>
-      _todaySchedule.where((e) => e.status == ExerciseStatus.missed).toList();
+      _todaySchedule.where((e) => e.status == ScheduleStatus.missed).toList();
 
   List<ScheduledExercise> get _upcomingExercises =>
-      _todaySchedule.where((e) => e.status == ExerciseStatus.upcoming).toList();
+      _todaySchedule.where((e) => e.status == ScheduleStatus.upcoming).toList();
 
   List<ScheduledExercise> get _completedExercises =>
-      _todaySchedule.where((e) => e.status == ExerciseStatus.completed).toList();
+      _todaySchedule.where((e) => e.status == ScheduleStatus.completed).toList();
 
   void _showRescheduleDialog(ScheduledExercise exercise) {
     showModalBottomSheet(

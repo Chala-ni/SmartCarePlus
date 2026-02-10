@@ -2,98 +2,114 @@
 ///
 /// Owner: Neelaka
 /// Browse and start exercises from the prescribed library
+/// Loads exercises from backend API (persisted per user)
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
+import '../../core/services/api_service.dart';
+import '../../providers/auth_provider.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 
-class ExerciseLibraryScreen extends StatefulWidget {
+class ExerciseLibraryScreen extends ConsumerStatefulWidget {
   const ExerciseLibraryScreen({super.key});
 
   @override
-  State<ExerciseLibraryScreen> createState() => _ExerciseLibraryScreenState();
+  ConsumerState<ExerciseLibraryScreen> createState() => _ExerciseLibraryScreenState();
 }
 
-class _ExerciseLibraryScreenState extends State<ExerciseLibraryScreen> {
+class _ExerciseLibraryScreenState extends ConsumerState<ExerciseLibraryScreen> {
   String _selectedCategory = 'All';
+  bool _isLoading = true;
+  String? _error;
   
   final List<String> _categories = ['All', 'Balance', 'Strength', 'Flexibility', 'Gait'];
   
-  final List<Map<String, dynamic>> _exercises = [
-    {
-      'name': 'Chair Stand',
-      'category': 'Strength',
-      'duration': '10 min',
-      'difficulty': 'Easy',
-      'reps': '3 sets x 10 reps',
-      'description': 'Stand up from chair without using hands',
-      'isPrescribed': true,
-    },
-    {
-      'name': 'Heel-to-Toe Walk',
-      'category': 'Gait',
-      'duration': '5 min',
-      'difficulty': 'Medium',
-      'reps': '2 sets x 20 steps',
-      'description': 'Walk in a straight line, heel to toe',
-      'isPrescribed': true,
-    },
-    {
-      'name': 'Single Leg Stand',
-      'category': 'Balance',
-      'duration': '8 min',
-      'difficulty': 'Medium',
-      'reps': '3 sets x 30 sec',
-      'description': 'Stand on one leg while holding support',
-      'isPrescribed': true,
-    },
-    {
-      'name': 'Ankle Circles',
-      'category': 'Flexibility',
-      'duration': '5 min',
-      'difficulty': 'Easy',
-      'reps': '10 circles each direction',
-      'description': 'Rotate ankles to improve flexibility',
-      'isPrescribed': false,
-    },
-    {
-      'name': 'Wall Push-ups',
-      'category': 'Strength',
-      'duration': '8 min',
-      'difficulty': 'Easy',
-      'reps': '3 sets x 8 reps',
-      'description': 'Push-ups against the wall for upper body',
-      'isPrescribed': false,
-    },
-    {
-      'name': 'Tandem Stand',
-      'category': 'Balance',
-      'duration': '5 min',
-      'difficulty': 'Hard',
-      'reps': '3 sets x 20 sec',
-      'description': 'Stand with feet in tandem position',
-      'isPrescribed': false,
-    },
-    {
-      'name': 'Marching in Place',
-      'category': 'Gait',
-      'duration': '10 min',
-      'difficulty': 'Easy',
-      'reps': '100 steps',
-      'description': 'March in place lifting knees high',
-      'isPrescribed': true,
-    },
-    {
-      'name': 'Seated Leg Raises',
-      'category': 'Strength',
-      'duration': '8 min',
-      'difficulty': 'Easy',
-      'reps': '3 sets x 10 each leg',
-      'description': 'Lift legs while seated in chair',
-      'isPrescribed': false,
-    },
-  ];
+  List<Map<String, dynamic>> _exercises = [];
+  
+  @override 
+  void initState() {
+    super.initState();
+    _loadExercises();
+  }
+  
+  Future<void> _loadExercises() async {
+    setState(() {
+      _isLoading = true;
+      _error = null;
+    });
+    
+    try {
+      final apiService = ref.read(apiServiceProvider);
+      final authState = ref.read(authProvider);
+      final userId = authState.firebaseUser?.uid ?? 'current_user';
+      
+      // First try to get user's generated exercise plan
+      final planResponse = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.physio}/plan/$userId/current',
+        requireAuth: false,
+      );
+      
+      if (planResponse.success && planResponse.data != null && 
+          planResponse.data!['exercises'] != null) {
+        // User has a generated plan - use those exercises
+        final planExercises = planResponse.data!['exercises'] as List;
+        setState(() {
+          _exercises = planExercises.map((e) {
+            return {
+              'id': e['id'] ?? e['exercise_id'] ?? '',
+              'name': e['name'] ?? e['exercise_name'] ?? 'Exercise',
+              'category': e['category'] ?? 'Strength',
+              'duration': e['duration'] ?? '${e['duration_minutes'] ?? 10} min',
+              'difficulty': e['difficulty'] ?? 'Easy',
+              'reps': e['reps'] ?? '${e['sets'] ?? 3} sets x ${e['repetitions'] ?? 10} reps',
+              'description': e['description'] ?? e['instructions'] ?? '',
+              'isPrescribed': true, // All plan exercises are prescribed
+              'exercise_type': e['exercise_type'] ?? _getExerciseType(e['name'] ?? ''),
+            };
+          }).toList().cast<Map<String, dynamic>>();
+          _isLoading = false;
+        });
+      } else {
+        // No plan yet - load from general exercise library
+        final response = await apiService.get<Map<String, dynamic>>(
+          '${ApiConfig.physio}/exercises',
+          requireAuth: false,
+        );
+        
+        if (response.success && response.data != null) {
+          final exerciseList = response.data!['exercises'] as List? ?? [];
+          setState(() {
+            _exercises = exerciseList.map((e) {
+              return {
+                'id': e['id'] ?? '',
+                'name': e['name'] ?? 'Exercise',
+                'category': e['category'] ?? 'Strength',
+                'duration': e['duration'] ?? '10 min',
+                'difficulty': e['difficulty'] ?? 'Easy',
+                'reps': e['reps'] ?? '3 sets x 10 reps',
+                'description': e['description'] ?? '',
+                'isPrescribed': e['is_prescribed'] ?? false,
+                'exercise_type': e['exercise_type'] ?? _getExerciseType(e['name'] ?? ''),
+              };
+            }).toList().cast<Map<String, dynamic>>();
+            _isLoading = false;
+          });
+        } else {
+          setState(() {
+            _error = response.error ?? 'Failed to load exercises';
+            _isLoading = false;
+          });
+        }
+      }
+    } catch (e) {
+      setState(() {
+        _error = 'Network error: $e';
+        _isLoading = false;
+      });
+    }
+  }
 
   List<Map<String, dynamic>> get _filteredExercises {
     if (_selectedCategory == 'All') {
@@ -232,49 +248,88 @@ class _ExerciseLibraryScreenState extends State<ExerciseLibraryScreen> {
               
               // Exercise List
               Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 20),
-                  children: [
-                    if (prescribedExercises.isNotEmpty) ...[
-                      Row(
-                        children: [
-                          const Icon(Icons.star, color: AppColors.neonOrange, size: 18),
-                          const SizedBox(width: 6),
-                          const Text(
-                            'Prescribed for You',
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                              color: AppColors.textPrimary,
+                child: _isLoading 
+                  ? const Center(
+                      child: CircularProgressIndicator(color: AppColors.neonCyan),
+                    )
+                  : _error != null 
+                    ? Center(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            const Icon(Icons.error_outline, color: AppColors.neonRed, size: 48),
+                            const SizedBox(height: 16),
+                            Text(_error!, style: const TextStyle(color: AppColors.textSecondary)),
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: _loadExercises,
+                              style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonCyan),
+                              child: const Text('Retry', style: TextStyle(color: Colors.black)),
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      ...prescribedExercises.map((exercise) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _buildExerciseCard(exercise, isPrescribed: true),
-                      )),
-                      const SizedBox(height: 16),
-                    ],
-                    
-                    if (otherExercises.isNotEmpty) ...[
-                      const Text(
-                        'More Exercises',
-                        style: TextStyle(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
+                          ],
                         ),
-                      ),
-                      const SizedBox(height: 12),
-                      ...otherExercises.map((exercise) => Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _buildExerciseCard(exercise, isPrescribed: false),
-                      )),
-                    ],
-                  ],
-                ),
+                      )
+                    : _exercises.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.fitness_center, color: AppColors.textSecondary, size: 48),
+                              const SizedBox(height: 16),
+                              const Text('No exercises found', style: TextStyle(color: AppColors.textSecondary)),
+                              const SizedBox(height: 8),
+                              const Text('Complete your profile to get personalized exercises', 
+                                style: TextStyle(color: AppColors.textSecondary, fontSize: 12)),
+                            ],
+                          ),
+                        )
+                      : RefreshIndicator(
+                          onRefresh: _loadExercises,
+                          color: AppColors.neonCyan,
+                          child: ListView(
+                            padding: const EdgeInsets.symmetric(horizontal: 20),
+                            children: [
+                              if (prescribedExercises.isNotEmpty) ...[
+                                Row(
+                                  children: [
+                                    const Icon(Icons.star, color: AppColors.neonOrange, size: 18),
+                                    const SizedBox(width: 6),
+                                    const Text(
+                                      'Prescribed for You',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                ...prescribedExercises.map((exercise) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: _buildExerciseCard(exercise, isPrescribed: true),
+                                )),
+                                const SizedBox(height: 16),
+                              ],
+                              
+                              if (otherExercises.isNotEmpty) ...[
+                                const Text(
+                                  'More Exercises',
+                                  style: TextStyle(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.textPrimary,
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                ...otherExercises.map((exercise) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: _buildExerciseCard(exercise, isPrescribed: false),
+                                )),
+                              ],
+                            ],
+                          ),
+                        ),
               ),
             ],
           ),
@@ -499,9 +554,7 @@ class _ExerciseLibraryScreenState extends State<ExerciseLibraryScreen> {
                     AppRoutes.exerciseMonitor,
                     arguments: {
                       'exerciseName': exercise['name'],
-                      'exerciseType': _getExerciseType(exercise['name']),
-                      'targetReps': _parseReps(exercise['reps']),
-                      'targetSets': _parseSets(exercise['reps']),
+                      'exerciseType': exercise['exercise_type'] ?? _getExerciseType(exercise['name']),
                     },
                   );
                 },
@@ -567,23 +620,5 @@ class _ExerciseLibraryScreenState extends State<ExerciseLibraryScreen> {
       'Squats': 'squat',
     };
     return typeMap[name] ?? 'chair_stand';
-  }
-
-  /// Parse reps from string like "3 sets x 10 reps"
-  int _parseReps(String repsString) {
-    final match = RegExp(r'(\d+)\s*reps').firstMatch(repsString);
-    if (match != null) {
-      return int.tryParse(match.group(1) ?? '10') ?? 10;
-    }
-    return 10;
-  }
-
-  /// Parse sets from string like "3 sets x 10 reps"
-  int _parseSets(String repsString) {
-    final match = RegExp(r'(\d+)\s*sets?').firstMatch(repsString);
-    if (match != null) {
-      return int.tryParse(match.group(1) ?? '3') ?? 3;
-    }
-    return 3;
   }
 }

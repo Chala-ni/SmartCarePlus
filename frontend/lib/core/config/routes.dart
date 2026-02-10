@@ -8,7 +8,6 @@ import '../../screens/auth/register_screen.dart';
 import '../../screens/auth/splash_screen.dart';
 import '../../screens/home/role_based_dashboard.dart';
 import '../../screens/physio/physio_home_screen.dart';
-import '../../screens/physio/gait_analysis_screen.dart';
 import '../../screens/physio/tug_test_screen.dart';
 import '../../screens/physio/exercise_library_screen.dart';
 import '../../screens/physio/exercise_schedule_screen.dart';
@@ -24,6 +23,7 @@ import '../../screens/guardian/alerts_screen.dart';
 import '../../screens/guardian/activity_log_screen.dart';
 import '../../screens/connections/connection_screen.dart';
 import '../../screens/profile/profile_screens.dart';
+import '../../screens/physio/physio_profile_setup_screen.dart';
 
 class AppRoutes {
   AppRoutes._();
@@ -37,7 +37,6 @@ class AppRoutes {
   
   // Physio routes
   static const String physioHome = '/physio';
-  static const String gaitAnalysis = '/physio/gait';
   static const String tugTest = '/physio/tug';
   static const String exercises = '/physio/exercises';
   static const String exerciseSchedule = '/physio/schedule';
@@ -61,6 +60,7 @@ class AppRoutes {
   static const String elderlyProfile = '/profile/elderly';
   static const String guardianProfile = '/profile/guardian';
   static const String caregiverProfile = '/profile/caregiver';
+  static const String physioProfileSetup = '/physio/profile-setup';
 
   /// Generate routes
   static Route<dynamic> generateRoute(RouteSettings settings) {
@@ -80,8 +80,6 @@ class AppRoutes {
       // Physio routes
       case physioHome:
         return _slideRoute(const PhysioHomeScreen(), settings);
-      case gaitAnalysis:
-        return _slideRoute(const GaitAnalysisScreen(), settings);
       case tugTest:
         return _slideRoute(const TUGTestScreen(), settings);
       case exercises:
@@ -94,8 +92,9 @@ class AppRoutes {
           ExerciseMonitorScreen(
             exerciseName: args?['exerciseName'] ?? 'Exercise',
             exerciseType: args?['exerciseType'] ?? 'chair_stand',
-            targetReps: args?['targetReps'] ?? 10,
-            targetSets: args?['targetSets'] ?? 3,
+            instructions: args?['instructions'] != null
+                ? List<String>.from(args!['instructions'])
+                : null,
           ),
           settings,
         );
@@ -133,6 +132,8 @@ class AppRoutes {
         return _slideRoute(const GuardianProfileScreen(), settings);
       case caregiverProfile:
         return _slideRoute(const CaregiverProfileScreen(), settings);
+      case physioProfileSetup:
+        return _slideRoute(const PhysioProfileSetupScreen(), settings);
       
       default:
         return _fadeRoute(

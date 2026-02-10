@@ -52,13 +52,41 @@ from .models import (
     ExerciseSessionHandler,
     SessionState,
     get_pose_analyzer,
-    get_session_handler
+    get_session_handler,
+    # Face Pain Analysis
+    FacePainAnalyzer,
+    FacialPainResult,
+    FacePainLevel,
+    get_face_pain_analyzer,
+    # Pain Data Storage
+    PainLevel,
+    get_pain_data_store,
+    # Patient Profile
+    PatientProfile,
+    calculate_bmi,
+    get_patient_profile_store,
+    # Exercise Plan Generator
+    get_exercise_plan_generator,
+    EXERCISE_LIBRARY
 )
+
+# Phase tracking for progressive reference poses
+from .models.phase_tracker import (
+    get_or_create_phase_tracker,
+    get_phase_tracker,
+    remove_phase_tracker,
+    ExercisePhaseTracker,
+)
+from .models.exercise_plan_generator import EXERCISE_PHASES
 
 router = APIRouter()
 
+# Frame counter per session for pain analysis throttling (every 3rd frame)
+_session_frame_counts: Dict[str, int] = {}
+PAIN_ANALYSIS_INTERVAL = 3  # Analyze pain every N frames
 
-# ── Diagnostic endpoint ────────────────────────────────────────────────────────
+
+# ── Diagnostic endpoints ───────────────────────────────────────────────────────
 @router.get("/diagnostic")
 async def physio_diagnostic():
     """Check MediaPipe status and pose analyzer health."""
@@ -73,11 +101,27 @@ async def physio_diagnostic():
     }
 
 
+@router.get("/diagnostic/face")
+async def face_pain_diagnostic():
+    """Check Face Mesh status for pain detection."""
+    from .models.face_pain_analyzer import FACE_MESH_AVAILABLE
+    face_analyzer = get_face_pain_analyzer()
+    return {
+        "face_landmarker_available": FACE_MESH_AVAILABLE,
+        "face_detector_initialized": face_analyzer.face_landmarker is not None,
+        "using_mock_data": face_analyzer.using_mock,
+        "model_path": str(face_analyzer.model_path) if hasattr(face_analyzer, 'model_path') else "unknown",
+        "status": "REAL face pain detection" if not face_analyzer.using_mock else "⚠️ MOCK data (random)",
+    }
+
+
 # Video configuration for exercise demonstrations
 VIDEO_DIR = Path(__file__).parent.parent / "media" / "simulation_footage" / "physio" / "exercise"
 
 # Map exercise types to video files
+# Using best-matching videos for exercises without dedicated videos
 EXERCISE_VIDEOS = {
+    # Original exercises with dedicated videos
     "chair_stand": "ex1.mp4",
     "heel_toe_walk": "ex2.mp4",
     "single_leg_stand": "ex4.mp4",
@@ -87,7 +131,19 @@ EXERCISE_VIDEOS = {
     "marching": "ex9.mp4",
     "leg_raise": "ex10.mp4",
     "arm_raise": "ex11.mp4",
-    "squat": "ex1.mp4",  # Reuse chair stand for now
+    
+    # Exercises using similar/related videos as fallback
+    "squat": "ex1.mp4",              # Similar lower body motion to chair stand
+    "neck_rotations": "ex11.mp4",    # Upper body focus
+    "shoulder_rolls": "ex11.mp4",    # Upper body focus
+    "seated_hamstring_stretch": "ex4.mp4",   # Leg-focused
+    "seated_hip_stretch": "ex4.mp4",         # Leg-focused
+    "calf_stretch": "ex10.mp4",              # Leg stretch
+    "seated_leg_raise": "ex10.mp4",          # Leg raise motion
+    "seated_arm_raises": "ex11.mp4",         # Arm motion
+    "deep_breathing": "ex11.mp4",            # Upper body
+    "gentle_spinal_twist": "ex11.mp4",       # Upper body
+    "marching_in_place": "ex9.mp4",          # Same as marching
 }
 
 # Thread pool for video streaming
@@ -445,6 +501,23 @@ async def start_exercise_session(request: StartSessionRequest):
         target_sets=request.target_sets
     )
     
+    # Create phase tracker for progressive pose guidance
+    phase_tracker = get_or_create_phase_tracker(
+        session_id=session.session_id,
+        exercise_id=request.exercise_type,
+        target_reps=request.target_reps,
+        target_sets=request.target_sets,
+    )
+    
+    # Check if exercise has defined phases for reference skeleton
+    has_phases = phase_tracker.has_phases
+    phase_info = None
+    if has_phases:
+        phase_info = {
+            "total_phases": len(phase_tracker.phase_sequence.phases),
+            "phase_names": [p.name for p in phase_tracker.phase_sequence.phases],
+        }
+    
     return {
         "status": "created",
         "session_id": session.session_id,
@@ -454,6 +527,8 @@ async def start_exercise_session(request: StartSessionRequest):
             "reps": request.target_reps,
             "sets": request.target_sets
         },
+        "has_phase_guidance": has_phases,
+        "phase_info": phase_info,
         "websocket_url": f"/physio/ws/session/{session.session_id}"
     }
 
@@ -469,10 +544,19 @@ async def complete_session(session_id: str):
     
     result = session_handler.complete_session(session_id)
     
+    # Get phase tracker adaptation info before cleanup
+    phase_tracker = get_phase_tracker(session_id)
+    adaptation_info = None
+    if phase_tracker:
+        adaptation_info = phase_tracker._get_adaptation_info()
+        # Cleanup phase tracker
+        remove_phase_tracker(session_id)
+    
     return {
         "status": "completed",
         "session_id": session_id,
-        "result": result
+        "result": result,
+        "adaptation": adaptation_info,
     }
 
 
@@ -571,12 +655,103 @@ async def analyze_session_frame(session_id: str, request: FrameRequest):
         )
         result["body_visible"] = is_body_visible
         if not is_body_visible:
-            result["message"] = "Show your full body in the camera"
+            # Get exercise-specific visibility message
+            visibility_msg = pose_analyzer._get_visibility_feedback(session.exercise_type, missing_landmarks)
+            result["message"] = visibility_msg
         
         # Include joint angles in response for frontend display
         result["joint_angles"] = {
             k: round(v, 1) for k, v in angles.items()
         }
+        
+        # Include landmark positions for skeleton overlay (normalized 0-1 coordinates)
+        # landmarks is Dict[int, Landmark], so iterate over items to get both index and landmark
+        if pose_result.landmarks:
+            result["landmarks"] = [
+                {
+                    "index": idx,
+                    "x": round(lm.x, 4),
+                    "y": round(lm.y, 4),
+                    "z": round(lm.z, 4) if hasattr(lm, 'z') else 0.0,
+                    "visibility": round(lm.visibility, 2) if hasattr(lm, 'visibility') else 1.0,
+                }
+                for idx, lm in pose_result.landmarks.items()
+            ]
+        
+        # ── Phase Tracking for Progressive Reference Poses ───────────────────
+        phase_tracker = get_phase_tracker(session_id)
+        if phase_tracker and phase_tracker.has_phases:
+            # Detect trembling from movement analysis
+            trembling = result.get("trembling_detected", False)
+            
+            # Get pain level from facial analysis (if available)
+            pain_level = None
+            pain_confidence = 0.0
+            facial_pain = result.get("facial_pain", {})
+            if facial_pain.get("detected"):
+                pain_level = facial_pain.get("pain_level")
+                pain_confidence = facial_pain.get("confidence", 0.0) / 100.0
+            
+            # Update phase tracker with current state
+            phase_progress = phase_tracker.update(
+                current_angles=angles,
+                pain_level=pain_level,
+                pain_confidence=pain_confidence,
+                trembling=trembling,
+            )
+            
+            # Include phase guidance in response
+            result["phase_guidance"] = {
+                "current_phase": phase_progress.get("current_phase"),
+                "next_phase": phase_progress.get("next_phase"),
+                "phase_index": phase_progress.get("phase_index"),
+                "total_phases": phase_progress.get("total_phases"),
+                "rep_completed": phase_progress.get("rep_completed", False),
+                "current_rep": phase_progress.get("current_rep"),
+                "current_set": phase_progress.get("current_set"),
+                "target_reps": phase_progress.get("target_reps"),
+                "target_sets": phase_progress.get("target_sets"),
+                "adaptation": phase_progress.get("adaptation"),
+            }
+            
+            # Override result rep/set from phase tracker (more accurate)
+            result["current_rep"] = phase_progress.get("current_rep", 0)
+            result["current_set"] = phase_progress.get("current_set", 1)
+            result["adapted_target_reps"] = phase_progress.get("target_reps")
+            
+            # Add dynamic phase-based feedback
+            current_phase = phase_progress.get("current_phase")
+            if current_phase:
+                match_quality = current_phase.get("match_quality", "not_matching")
+                visual_cue = current_phase.get("visual_cue", "")
+                hold_required = current_phase.get("hold_required", 0)
+                hold_progress = current_phase.get("hold_progress", 0)
+                
+                # Generate dynamic feedback based on match quality
+                dynamic_feedback = []
+                if match_quality == "matching" or match_quality == "holding":
+                    if hold_required > 0:
+                        remaining = max(0, hold_required - hold_progress)
+                        if remaining > 0:
+                            dynamic_feedback.append(f"Hold for {remaining:.1f}s more ✓")
+                        else:
+                            dynamic_feedback.append("Great hold! ✓")
+                    else:
+                        dynamic_feedback.append("Good position! ✓")
+                elif match_quality == "approaching":
+                    dynamic_feedback.append(f"Almost there — {visual_cue}")
+                else:
+                    if visual_cue:
+                        dynamic_feedback.append(visual_cue)
+                
+                # Prepend dynamic feedback to existing feedback
+                existing_feedback = result.get("feedback", [])
+                result["feedback"] = dynamic_feedback + [f for f in existing_feedback if f not in dynamic_feedback]
+            
+            # Include reference pose for ghost skeleton
+            ref_pose = phase_tracker.get_reference_pose_data()
+            if ref_pose:
+                result["reference_pose"] = ref_pose
         
         # Log rep/form results
         logger.debug(
@@ -586,11 +761,129 @@ async def analyze_session_frame(session_id: str, request: FrameRequest):
             f"feedback={result.get('feedback', [])}"
         )
         
+        # ── Face Pain Analysis (every Nth frame to reduce compute) ───────────
+        if session_id not in _session_frame_counts:
+            _session_frame_counts[session_id] = 0
+        _session_frame_counts[session_id] += 1
+        
+        face_pain_result = None
+        if _session_frame_counts[session_id] % PAIN_ANALYSIS_INTERVAL == 0:
+            try:
+                face_analyzer = get_face_pain_analyzer()
+                face_pain_result = face_analyzer.analyze_pain(frame_rgb, timestamp_ms)
+                
+                if face_pain_result and face_pain_result.face_detected:
+                    result["facial_pain"] = {
+                        "detected": True,
+                        "pain_level": face_pain_result.pain_level.value,
+                        "confidence": round(face_pain_result.confidence * 100, 1),
+                        "pain_score": round(face_pain_result.pain_score * 100, 1),
+                        "details": face_pain_result.details,
+                    }
+                    
+                    # Store significant pain events (MILD or higher)
+                    if face_pain_result.pain_level.value != "none":
+                        pain_store = get_pain_data_store()
+                        pain_store.record_pain_event(
+                            session_id=session_id,
+                            user_id=session.user_id,
+                            pain_level=PainLevel(face_pain_result.pain_level.value),
+                            confidence=face_pain_result.confidence,
+                            source="face",
+                            exercise_type=session.exercise_type.value if hasattr(session.exercise_type, 'value') else str(session.exercise_type),
+                            rep_number=session.current_rep,
+                            set_number=session.current_set,
+                            action_units=face_pain_result.action_units,
+                            details=face_pain_result.details
+                        )
+                        
+                        logger.info(
+                            f"  😣 Pain detected [{session_id}] level={face_pain_result.pain_level.value} "
+                            f"confidence={face_pain_result.confidence:.0%}"
+                        )
+                else:
+                    result["facial_pain"] = {"detected": False, "message": "No face detected"}
+                    
+            except Exception as pain_err:
+                logger.warning(f"  ⚠️ Face pain analysis error: {pain_err}")
+                result["facial_pain"] = {"detected": False, "error": str(pain_err)}
+        
         return result
         
     except Exception as e:
         logger.error(f"Frame processing error for session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Frame processing error: {str(e)}")
+
+
+# ============= Pain History Endpoints =============
+
+@router.get("/pain/session/{session_id}")
+async def get_session_pain_events(session_id: str):
+    """Get all pain events for a session."""
+    pain_store = get_pain_data_store()
+    events = pain_store.get_session_events(session_id)
+    
+    return {
+        "session_id": session_id,
+        "total_events": len(events),
+        "events": [e.to_dict() for e in events]
+    }
+
+
+@router.get("/pain/history/{user_id}")
+async def get_user_pain_history(user_id: str, days: int = 7):
+    """Get aggregated pain history for a user."""
+    pain_store = get_pain_data_store()
+    history = pain_store.get_user_pain_history(user_id, days)
+    
+    return history.to_dict()
+
+
+@router.get("/pain/report/{user_id}")
+async def get_caregiver_pain_report(user_id: str, days: int = 7):
+    """
+    Generate a caregiver-friendly pain report.
+    
+    Includes:
+    - Summary statistics
+    - Per-exercise breakdown  
+    - Recommendations
+    - Recent session details
+    """
+    pain_store = get_pain_data_store()
+    report = pain_store.get_caregiver_report(user_id, days)
+    
+    return report
+
+
+@router.post("/session/{session_id}/pain-summary")
+async def finalize_session_pain_summary(session_id: str, exercise_stopped: bool = False, intensity_reduced: bool = False):
+    """
+    Create final pain summary when session ends.
+    Called automatically when session completes.
+    """
+    _, session_handler = get_services()
+    session = session_handler.get_session(session_id)
+    
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    
+    pain_store = get_pain_data_store()
+    summary = pain_store.create_session_summary(
+        session_id=session_id,
+        user_id=session.user_id,
+        exercise_type=session.exercise_type.value if hasattr(session.exercise_type, 'value') else str(session.exercise_type),
+        start_time=session.created_at,
+        end_time=datetime.now(),
+        exercise_stopped=exercise_stopped,
+        intensity_reduced=intensity_reduced
+    )
+    
+    # Clean up frame counter
+    if session_id in _session_frame_counts:
+        del _session_frame_counts[session_id]
+    
+    return summary.to_dict()
 
 
 @router.get("/exercises")
@@ -1220,3 +1513,280 @@ def _score_to_quality(score: float) -> str:
         return "fair"
     else:
         return "poor"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PATIENT PROFILE ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class PatientProfileRequest(BaseModel):
+    """Request model for creating/updating patient profile."""
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    date_of_birth: Optional[str] = None  # ISO format: YYYY-MM-DD
+    gender: Optional[str] = None
+    height_cm: Optional[float] = None
+    weight_kg: Optional[float] = None
+    emergency_contact_name: Optional[str] = None
+    emergency_contact_phone: Optional[str] = None
+    pain_tolerance: Optional[str] = None
+    baseline_pain_level: Optional[int] = None
+    baseline_fatigue_level: Optional[int] = None
+    baseline_mobility_score: Optional[int] = None
+    primary_goal: Optional[str] = None
+    secondary_goals: Optional[List[str]] = None
+    medical_history: Optional[Dict[str, Any]] = None
+    lifestyle: Optional[Dict[str, Any]] = None
+
+
+@router.get("/profile/{user_id}")
+async def get_patient_profile(user_id: str):
+    """Get patient profile for a user."""
+    profile_store = get_patient_profile_store()
+    profile = profile_store.get_profile(user_id)
+    
+    if not profile:
+        return {
+            "user_id": user_id,
+            "exists": False,
+            "message": "Profile not found. Create one first."
+        }
+    
+    return {
+        "exists": True,
+        "profile": profile.to_dict()
+    }
+
+
+@router.post("/profile/{user_id}")
+async def create_or_update_profile(user_id: str, request: PatientProfileRequest):
+    """Create or update patient profile."""
+    profile_store = get_patient_profile_store()
+    
+    # Get or create profile
+    profile = profile_store.get_or_create_profile(user_id)
+    
+    # Update with provided data
+    updates = request.model_dump(exclude_none=True)
+    if updates:
+        profile = profile_store.update_profile(user_id, updates)
+    
+    return {
+        "status": "profile_updated",
+        "user_id": user_id,
+        "profile": profile.to_dict()
+    }
+
+
+@router.delete("/profile/{user_id}")
+async def delete_profile(user_id: str):
+    """Delete a patient profile."""
+    profile_store = get_patient_profile_store()
+    deleted = profile_store.delete_profile(user_id)
+    
+    return {
+        "status": "deleted" if deleted else "not_found",
+        "user_id": user_id
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BMI CALCULATION ENDPOINTS  
+# ══════════════════════════════════════════════════════════════════════════════
+
+class BMIRequest(BaseModel):
+    """Request model for BMI calculation."""
+    weight_kg: float
+    height_cm: float
+    age: Optional[int] = 0
+
+
+@router.post("/bmi/calculate")
+async def calculate_bmi_endpoint(request: BMIRequest):
+    """
+    Calculate BMI with health category and recommendations.
+    
+    Args:
+        weight_kg: Weight in kilograms
+        height_cm: Height in centimeters
+        age: Age in years (optional, for age-specific recommendations)
+    
+    Returns:
+        BMI value, category, health risk level, and recommendations
+    """
+    result = calculate_bmi(request.weight_kg, request.height_cm, request.age or 0)
+    return result.to_dict()
+
+
+@router.get("/bmi/{user_id}")
+async def get_user_bmi(user_id: str):
+    """Get BMI for a user based on their profile."""
+    profile_store = get_patient_profile_store()
+    profile = profile_store.get_profile(user_id)
+    
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    
+    if profile.height_cm <= 0 or profile.weight_kg <= 0:
+        raise HTTPException(status_code=400, detail="Height and weight required in profile")
+    
+    result = profile.calculate_bmi_result()
+    return {
+        "user_id": user_id,
+        "height_cm": profile.height_cm,
+        "weight_kg": profile.weight_kg,
+        "age": profile.age,
+        **result.to_dict()
+    }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# EXERCISE PLAN GENERATION ENDPOINTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+class GeneratePlanRequest(BaseModel):
+    """Request model for generating exercise plan."""
+    date: Optional[str] = None  # ISO format: YYYY-MM-DD
+    difficulty: Optional[str] = None  # very_easy, easy, moderate, challenging
+
+
+@router.post("/plan/generate/{user_id}")
+async def generate_exercise_plan(user_id: str, request: GeneratePlanRequest):
+    """
+    Generate a personalized daily exercise plan.
+    
+    The plan is generated based on:
+    - Patient profile (BMI, age, arthritis, affected joints)
+    - Pain history from recent sessions
+    - Mobility level and available equipment
+    
+    Args:
+        user_id: Patient user ID
+        date: Target date for the plan (default: today)
+        difficulty: Override difficulty level (optional)
+    
+    Returns:
+        Complete daily exercise plan with personalized exercises
+    """
+    from datetime import date as date_cls
+    
+    plan_generator = get_exercise_plan_generator()
+    
+    # Parse date
+    plan_date = None
+    if request.date:
+        plan_date = date_cls.fromisoformat(request.date)
+    
+    # Generate plan
+    plan = plan_generator.generate_daily_plan(
+        user_id=user_id,
+        plan_date=plan_date,
+        override_difficulty=request.difficulty
+    )
+    
+    return plan.to_dict()
+
+
+@router.get("/plan/{plan_id}")
+async def get_exercise_plan(plan_id: str):
+    """Get an exercise plan by ID."""
+    plan_generator = get_exercise_plan_generator()
+    plan = plan_generator.get_plan(plan_id)
+    
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    return plan.to_dict()
+
+
+@router.get("/plans/{user_id}")
+async def get_user_plans(user_id: str, days: int = 7):
+    """Get recent exercise plans for a user."""
+    plan_generator = get_exercise_plan_generator()
+    plans = plan_generator.get_user_plans(user_id, days)
+    
+    return {
+        "user_id": user_id,
+        "period_days": days,
+        "total_plans": len(plans),
+        "plans": [p.to_dict() for p in plans]
+    }
+
+
+@router.post("/plan/{plan_id}/complete")
+async def complete_exercise_plan(plan_id: str, feedback: Optional[str] = None):
+    """Mark an exercise plan as completed."""
+    plan_generator = get_exercise_plan_generator()
+    plan = plan_generator.mark_plan_completed(plan_id, feedback)
+    
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    return {
+        "status": "completed",
+        "plan_id": plan_id,
+        "completed_at": plan.completed_at.isoformat() if plan.completed_at else None
+    }
+
+
+@router.post("/plan/{plan_id}/exercise/{exercise_id}/complete")
+async def complete_single_exercise(plan_id: str, exercise_id: str):
+    """Mark a single exercise as completed within a plan."""
+    plan_generator = get_exercise_plan_generator()
+    plan = plan_generator.mark_exercise_completed(plan_id, exercise_id)
+    
+    if not plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    
+    return {
+        "status": "exercise_completed",
+        "plan_id": plan_id,
+        "exercise_id": exercise_id,
+        "completed_exercises": plan.completed_exercises,
+        "completed_exercise_count": plan.completed_exercise_count,
+        "exercise_count": plan.exercise_count,
+        "plan_completed": plan.completed,
+    }
+
+
+@router.get("/exercise-library")
+async def get_exercise_library(category: Optional[str] = None):
+    """
+    Get the exercise library with all available exercises.
+    
+    Args:
+        category: Filter by category (optional)
+    """
+    exercises = list(EXERCISE_LIBRARY.values())
+    
+    if category:
+        exercises = [e for e in exercises if e.category.value == category]
+    
+    return {
+        "total": len(exercises),
+        "categories": list(set(e.category.value for e in EXERCISE_LIBRARY.values())),
+        "exercises": [e.to_dict() for e in exercises]
+    }
+
+
+@router.get("/plan/today/{user_id}")
+async def get_or_create_today_plan(user_id: str):
+    """
+    Get today's exercise plan for a user, creating one if it doesn't exist.
+    
+    This is the main endpoint for the elderly user's daily exercise screen.
+    """
+    from datetime import date as date_cls
+    
+    plan_generator = get_exercise_plan_generator()
+    today = date_cls.today()
+    
+    # Check if plan exists for today
+    plans = plan_generator.get_user_plans(user_id, days=1)
+    today_plan = next((p for p in plans if p.date == today), None)
+    
+    if not today_plan:
+        # Generate new plan
+        today_plan = plan_generator.generate_daily_plan(user_id, today)
+    
+    return today_plan.to_dict()

@@ -8,12 +8,39 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
+import '../../providers/physio_provider.dart';
+import '../../providers/auth_provider.dart';
 
-class PhysioHomeScreen extends ConsumerWidget {
+class PhysioHomeScreen extends ConsumerStatefulWidget {
   const PhysioHomeScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<PhysioHomeScreen> createState() => _PhysioHomeScreenState();
+}
+
+class _PhysioHomeScreenState extends ConsumerState<PhysioHomeScreen> {
+  bool _hasLoadedData = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_hasLoadedData) {
+        _hasLoadedData = true;
+        final user = ref.read(currentUserProvider);
+        final userId = user?.uid ?? 'demo_user';
+        ref.read(physioProvider.notifier).loadTodayPlan(userId);
+        ref.read(physioProvider.notifier).loadBMI(userId);
+        ref.read(physioProvider.notifier).loadPatientProfile(userId);
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final physioState = ref.watch(physioProvider);
+    final todayPlan = physioState.todayPlan;
+    final bmi = physioState.bmiResult;
     return Scaffold(
       body: Container(
         decoration: const BoxDecoration(
@@ -78,6 +105,54 @@ class PhysioHomeScreen extends ConsumerWidget {
                 ),
                 
                 const SizedBox(height: 24),
+                
+                // Profile setup prompt
+                if (physioState.patientProfile == null || !physioState.patientProfile!.profileComplete)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 16),
+                    child: GlassmorphicCard(
+                      glowColor: AppColors.neonPurple,
+                      glowIntensity: 0.2,
+                      padding: const EdgeInsets.all(14),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppColors.neonPurple.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.assignment_ind, color: AppColors.neonPurple, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          const Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Complete Your Physio Profile',
+                                    style: TextStyle(color: AppColors.textPrimary, fontWeight: FontWeight.w600, fontSize: 14)),
+                                SizedBox(height: 2),
+                                Text('Set up medical history & preferences for personalized exercise plans',
+                                    style: TextStyle(color: AppColors.textSecondary, fontSize: 11)),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          GestureDetector(
+                            onTap: () => Navigator.pushNamed(context, AppRoutes.physioProfileSetup),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: AppColors.neonPurple,
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: const Text('Setup', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 12)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
                 
                 // Fall Risk Summary
                 _buildFallRiskCard(),
@@ -171,29 +246,32 @@ class PhysioHomeScreen extends ConsumerWidget {
                 ),
                 const SizedBox(height: 8),
                 
-                _buildExerciseCard(
-                  name: 'Chair Stand Exercise',
-                  duration: '10 min',
-                  difficulty: 'Easy',
-                  reps: '3 sets x 10 reps',
-                  isCompleted: true,
-                ),
-                const SizedBox(height: 8),
-                _buildExerciseCard(
-                  name: 'Heel-to-Toe Walk',
-                  duration: '5 min',
-                  difficulty: 'Medium',
-                  reps: '2 sets x 20 steps',
-                  isCompleted: false,
-                ),
-                const SizedBox(height: 8),
-                _buildExerciseCard(
-                  name: 'Single Leg Stand',
-                  duration: '8 min',
-                  difficulty: 'Medium',
-                  reps: '3 sets x 30 sec',
-                  isCompleted: false,
-                ),
+                if (physioState.isLoading)
+                  const Center(
+                    child: Padding(
+                      padding: EdgeInsets.all(20),
+                      child: CircularProgressIndicator(color: AppColors.neonCyan),
+                    ),
+                  )
+                else if (todayPlan != null && todayPlan.exercises.isNotEmpty)
+                  ...todayPlan.exercises.take(3).map((exercise) => Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: _buildExerciseCard(
+                      name: exercise.name,
+                      duration: exercise.durationDisplay,
+                      difficulty: exercise.difficulty.replaceAll('_', ' '),
+                      reps: '${exercise.prescribedSets} sets x ${exercise.prescribedReps} reps',
+                      isCompleted: todayPlan.completed,
+                    ),
+                  ))
+                else
+                  _buildExerciseCard(
+                    name: 'No exercises yet',
+                    duration: '--',
+                    difficulty: '--',
+                    reps: 'Generate a plan from your dashboard',
+                    isCompleted: false,
+                  ),
                 
                 const SizedBox(height: 24),
                 
@@ -209,23 +287,6 @@ class PhysioHomeScreen extends ConsumerWidget {
                 const SizedBox(height: 12),
                 
                 _buildProgressCard(),
-                
-                const SizedBox(height: 24),
-                
-                // Recent Sessions
-                const Text(
-                  'Recent Sessions',
-                  style: TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                
-                _buildSessionItem('Gait Analysis', 'Today, 10:30 AM', 'Stride: 45cm, Cadence: 98', AppColors.neonCyan),
-                _buildSessionItem('TUG Test', 'Yesterday', 'Score: 12.5s (Low Risk)', AppColors.neonGreen),
-                _buildSessionItem('Balance Assessment', '2 days ago', 'Score: 85/100', AppColors.neonPurple),
               ],
             ),
           ),
@@ -235,8 +296,20 @@ class PhysioHomeScreen extends ConsumerWidget {
   }
 
   Widget _buildFallRiskCard() {
+    final physioState = ref.watch(physioProvider);
+    final compliance = physioState.compliance?.complianceRate ?? 0.0;
+    final bmi = physioState.bmiResult;
+    
+    // Derive risk from compliance and BMI
+    final complianceScore = (compliance * 100).round();
+    final riskLabel = complianceScore >= 70 ? 'LOW' : (complianceScore >= 40 ? 'MEDIUM' : 'HIGH');
+    final riskColor = complianceScore >= 70 ? AppColors.neonGreen : (complianceScore >= 40 ? Colors.orange : Colors.redAccent);
+    final riskMessage = bmi != null
+        ? 'BMI: ${bmi.bmi.toStringAsFixed(1)} (${bmi.displayCategory}). Compliance: $complianceScore%'
+        : 'Exercise compliance: $complianceScore%';
+    
     return GlassmorphicCard(
-      glowColor: AppColors.neonGreen,
+      glowColor: riskColor,
       glowIntensity: 0.2,
       padding: const EdgeInsets.all(20),
       child: Row(
@@ -252,25 +325,25 @@ class PhysioHomeScreen extends ConsumerWidget {
                   width: 90,
                   height: 90,
                   child: CircularProgressIndicator(
-                    value: 0.25,
+                    value: compliance,
                     strokeWidth: 10,
-                    backgroundColor: AppColors.neonGreen.withOpacity(0.1),
-                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.neonGreen),
+                    backgroundColor: riskColor.withOpacity(0.1),
+                    valueColor: AlwaysStoppedAnimation<Color>(riskColor),
                   ),
                 ),
-                const Column(
+                Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     Text(
-                      '25',
+                      '$complianceScore',
                       style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
-                        color: AppColors.neonGreen,
+                        color: riskColor,
                       ),
                     ),
-                    Text(
-                      '/100',
+                    const Text(
+                      '%',
                       style: TextStyle(
                         fontSize: 12,
                         color: AppColors.textSecondary,
@@ -289,7 +362,7 @@ class PhysioHomeScreen extends ConsumerWidget {
                 Row(
                   children: [
                     const Text(
-                      'Fall Risk Score',
+                      'Health Score',
                       style: TextStyle(
                         fontSize: 18,
                         fontWeight: FontWeight.bold,
@@ -300,24 +373,24 @@ class PhysioHomeScreen extends ConsumerWidget {
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: AppColors.neonGreen.withOpacity(0.15),
+                        color: riskColor.withOpacity(0.15),
                         borderRadius: BorderRadius.circular(8),
                       ),
-                      child: const Text(
-                        'LOW',
+                      child: Text(
+                        riskLabel,
                         style: TextStyle(
                           fontSize: 10,
                           fontWeight: FontWeight.bold,
-                          color: AppColors.neonGreen,
+                          color: riskColor,
                         ),
                       ),
                     ),
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text(
-                  'Your mobility is looking great! Keep up with your exercises.',
-                  style: TextStyle(
+                Text(
+                  riskMessage,
+                  style: const TextStyle(
                     fontSize: 13,
                     color: AppColors.textSecondary,
                   ),
@@ -327,9 +400,9 @@ class PhysioHomeScreen extends ConsumerWidget {
                   children: [
                     const Icon(Icons.update, size: 14, color: AppColors.textSecondary),
                     const SizedBox(width: 4),
-                    const Text(
-                      'Updated today at 10:30 AM',
-                      style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                    Text(
+                      'Updated ${DateTime.now().hour}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+                      style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
                     ),
                   ],
                 ),
@@ -465,6 +538,13 @@ class PhysioHomeScreen extends ConsumerWidget {
   }
 
   Widget _buildProgressCard() {
+    final physioState = ref.watch(physioProvider);
+    final todayPlan = physioState.todayPlan;
+    final totalExercises = todayPlan?.exercises.length ?? 0;
+    final completedExercises = todayPlan?.completedExerciseCount ?? 0;
+    final totalMinutes = todayPlan?.exercises.fold<int>(0, (sum, e) => sum + e.estimatedMinutes) ?? 0;
+    final compliance = ((physioState.compliance?.complianceRate ?? 0.0) * 100).round();
+    
     return GlassmorphicCard(
       padding: const EdgeInsets.all(16),
       child: Column(
@@ -472,25 +552,51 @@ class PhysioHomeScreen extends ConsumerWidget {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildProgressStat('Sessions', '12', '+3', AppColors.neonCyan),
-              _buildProgressStat('Exercises', '24', '+5', AppColors.neonGreen),
-              _buildProgressStat('Minutes', '180', '+45', AppColors.neonPurple),
+              _buildProgressStat('Compliance', '$compliance%', '', AppColors.neonCyan),
+              _buildProgressStat('Exercises', '$completedExercises/$totalExercises', '', AppColors.neonGreen),
+              _buildProgressStat('Minutes', '$totalMinutes', 'min', AppColors.neonPurple),
             ],
           ),
           const SizedBox(height: 16),
-          // Simple bar chart representation
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildDayBar('M', 0.8, true),
-              _buildDayBar('T', 0.6, true),
-              _buildDayBar('W', 0.9, true),
-              _buildDayBar('T', 0.4, true),
-              _buildDayBar('F', 0.7, true),
-              _buildDayBar('S', 0.5, false),
-              _buildDayBar('S', 0.0, false),
-            ],
-          ),
+          // Progress bar for today
+          if (todayPlan != null) ...[
+            Row(
+              children: [
+                Expanded(
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: todayPlan.progress,
+                      minHeight: 8,
+                      backgroundColor: AppColors.neonCyan.withOpacity(0.1),
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppColors.neonCyan),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Text(
+                  '${(todayPlan.progress * 100).round()}%',
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.neonCyan,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              todayPlan.completed ? 'Plan completed!' : 'Today\'s plan in progress',
+              style: TextStyle(
+                fontSize: 11,
+                color: todayPlan.completed ? AppColors.neonGreen : AppColors.textSecondary,
+              ),
+            ),
+          ] else
+            const Text(
+              'No plan generated yet',
+              style: TextStyle(fontSize: 11, color: AppColors.textSecondary),
+            ),
         ],
       ),
     );
@@ -532,84 +638,4 @@ class PhysioHomeScreen extends ConsumerWidget {
     );
   }
 
-  Widget _buildDayBar(String day, double value, bool isPast) {
-    return Column(
-      children: [
-        Container(
-          width: 28,
-          height: 60,
-          alignment: Alignment.bottomCenter,
-          child: Container(
-            width: 28,
-            height: 60 * value,
-            decoration: BoxDecoration(
-              color: isPast
-                  ? AppColors.neonCyan.withOpacity(0.7)
-                  : AppColors.surfaceLight,
-              borderRadius: BorderRadius.circular(4),
-            ),
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          day,
-          style: TextStyle(
-            fontSize: 11,
-            color: isPast ? AppColors.textPrimary : AppColors.textSecondary,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildSessionItem(String title, String time, String result, Color color) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 10),
-      child: GlassmorphicCard(
-        padding: const EdgeInsets.all(12),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(Icons.analytics, color: color, size: 20),
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  Text(
-                    result,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: AppColors.textSecondary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            Text(
-              time,
-              style: const TextStyle(
-                fontSize: 11,
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }
