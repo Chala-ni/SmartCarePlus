@@ -146,6 +146,12 @@ class ExercisePhaseTracker:
         self._current_phase_progress: Optional[PhaseProgress] = None
         self._hold_start: Optional[datetime] = None
         
+        # Phase transition stabilization
+        self._matching_frame_count = 0          # Consecutive matching frames
+        self._min_matching_frames = 3           # Need 3 consecutive matches (~0.6s at 5fps)
+        self._phase_transition_cooldown = 0     # Frames to skip after transition
+        self._transition_cooldown_frames = 2    # Skip 2 frames after advancing (~0.4s)
+        
         # Pain/adaptation tracking
         self.pain_events: List[Dict[str, Any]] = []
         self.total_pain_score = 0.0
@@ -224,19 +230,30 @@ class ExercisePhaseTracker:
         self._current_phase_progress.match_quality = match_result["quality"]
         self._current_phase_progress.match_score = match_result["score"]
         
+        # Apply transition cooldown — skip advancement for a few frames after a phase change
+        if self._phase_transition_cooldown > 0:
+            self._phase_transition_cooldown -= 1
+            return self._build_response(False)
+        
         # Handle hold phases
         phase_completed = False
         if self.current_phase.hold_seconds > 0:
             phase_completed = self._update_hold_progress(match_result["quality"])
         else:
-            # No hold required - complete immediately on match
+            # Non-hold phases: require multiple consecutive matching frames
             if match_result["quality"] == PhaseMatchQuality.MATCHING:
-                phase_completed = True
+                self._matching_frame_count += 1
+                if self._matching_frame_count >= self._min_matching_frames:
+                    phase_completed = True
+            else:
+                self._matching_frame_count = 0
         
         # Advance to next phase if completed
         rep_completed = False
         if phase_completed:
             self._current_phase_progress.completed = True
+            self._matching_frame_count = 0
+            self._phase_transition_cooldown = self._transition_cooldown_frames
             rep_completed = self._advance_phase()
         
         # Build response

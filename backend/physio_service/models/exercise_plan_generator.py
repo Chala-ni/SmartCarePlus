@@ -1246,16 +1246,27 @@ class ExercisePlanGenerator:
         self._init_firestore()
     
     def _init_firestore(self):
-        """Initialize Firestore connection."""
+        """Initialize Firestore connection (lazy — retries on each access)."""
+        if self._db:
+            return True
         try:
             from core.database import get_db
             self._db = get_db()
             if self._db:
                 logger.info("📊 ExercisePlanGenerator connected to Firestore")
+                return True
             else:
-                logger.warning("⚠️ Firestore not available, using in-memory only")
+                logger.debug("⚠️ Firestore not yet available")
+                return False
         except Exception as e:
-            logger.warning(f"⚠️ Firestore init failed: {e}, using in-memory only")
+            logger.warning(f"⚠️ Firestore init failed: {e}")
+            return False
+
+    def _ensure_db(self):
+        """Ensure Firestore connection is available (lazy init)."""
+        if not self._db:
+            self._init_firestore()
+        return self._db is not None
     
     def _plan_to_dict(self, plan: DailyExercisePlan) -> Dict[str, Any]:
         """Convert DailyExercisePlan to Firestore-compatible dict."""
@@ -1301,9 +1312,9 @@ class ExercisePlanGenerator:
         # Reconstruct exercises from stored data
         exercises_data = data.get("exercises", [])
         for ex_data in exercises_data:
-            # Find the exercise definition from EXERCISE_DATABASE
+            # Find the exercise definition from EXERCISE_LIBRARY
             exercise_id = ex_data.get("exercise_id", "")
-            exercise_def = EXERCISE_DATABASE.get(exercise_id)
+            exercise_def = EXERCISE_LIBRARY.get(exercise_id)
             if exercise_def:
                 planned = PlannedExercise(
                     exercise=exercise_def,
@@ -1322,7 +1333,8 @@ class ExercisePlanGenerator:
     
     def _save_to_firestore(self, plan: DailyExercisePlan):
         """Save plan to Firestore."""
-        if not self._db:
+        if not self._ensure_db():
+            logger.warning(f"⚠️ Firestore unavailable — cannot save plan {plan.plan_id}")
             return
         try:
             data = self._plan_to_dict(plan)
@@ -1333,7 +1345,7 @@ class ExercisePlanGenerator:
     
     def _load_plan_from_firestore(self, plan_id: str) -> Optional[DailyExercisePlan]:
         """Load a single plan from Firestore."""
-        if not self._db:
+        if not self._ensure_db():
             return None
         try:
             doc = self._db.collection(self.COLLECTION_NAME).document(plan_id).get()
@@ -1347,7 +1359,8 @@ class ExercisePlanGenerator:
     
     def _load_user_plans_from_firestore(self, user_id: str, days: int = 7) -> List[DailyExercisePlan]:
         """Load user's plans from Firestore."""
-        if not self._db:
+        if not self._ensure_db():
+            logger.warning(f"⚠️ Firestore unavailable — cannot load plans for user {user_id}")
             return []
         try:
             cutoff = (date.today() - timedelta(days=days)).isoformat()

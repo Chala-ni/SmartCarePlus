@@ -85,6 +85,97 @@ router = APIRouter()
 _session_frame_counts: Dict[str, int] = {}
 PAIN_ANALYSIS_INTERVAL = 3  # Analyze pain every N frames
 
+# ── Pain/Discomfort Caregiver Notification ───────────────────────────────────
+# Cooldown per session to avoid spamming caregivers
+_pain_alert_cooldowns: Dict[str, float] = {}
+PAIN_ALERT_COOLDOWN_SECONDS = 120  # 2 minutes between pain alerts per session
+
+import time as _time
+
+def _notify_caregivers_of_pain(
+    session_id: str,
+    user_id: str,
+    pain_type: str,
+    pain_confidence: float,
+    pain_details: list,
+    exercise_type: str,
+    recommendation: str,
+):
+    """
+    Send an alert to connected caregivers when pain/discomfort is detected during exercise.
+    Uses the guardian service's alert system (Firestore + FCM push + email).
+    """
+    import threading as _threading
+    
+    # Check cooldown
+    cooldown_key = f"{session_id}_{pain_type}"
+    now = _time.time()
+    last_alert = _pain_alert_cooldowns.get(cooldown_key, 0)
+    if now - last_alert < PAIN_ALERT_COOLDOWN_SECONDS:
+        logger.debug(f"⏳ Pain alert on cooldown for {cooldown_key}, skipping")
+        return
+    _pain_alert_cooldowns[cooldown_key] = now
+    
+    def _send():
+        try:
+            from guardian_service.router import _create_alert
+            from core.database import get_db
+            
+            # Get the elderly user's name from Firestore
+            db = get_db()
+            elderly_name = "Unknown"
+            if db:
+                try:
+                    user_doc = db.collection("users").document(user_id).get()
+                    if user_doc.exists:
+                        user_data = user_doc.to_dict()
+                        elderly_name = user_data.get("displayName") or user_data.get("name", "Unknown")
+                except Exception:
+                    pass
+            
+            # Determine severity based on pain type and confidence
+            if pain_type == "severe_pain" or pain_confidence > 0.7:
+                severity = "critical"
+                title = f"⚠️ Severe Pain Detected — {elderly_name}"
+            elif pain_type == "trembling":
+                severity = "warning"
+                title = f"Trembling Detected — {elderly_name}"
+            else:
+                severity = "warning"
+                title = f"Pain/Discomfort Detected — {elderly_name}"
+            
+            details_str = ", ".join(pain_details[:3]) if pain_details else "Pain indicators detected"
+            description = (
+                f"{elderly_name} is experiencing {pain_type.replace('_', ' ')} during "
+                f"{exercise_type.replace('_', ' ')} exercise. "
+                f"Confidence: {pain_confidence:.0%}. "
+                f"Details: {details_str}. "
+                f"Recommendation: {recommendation}."
+            )
+            
+            _create_alert(
+                alert_type="exercise_pain",
+                severity=severity,
+                title=title,
+                description=description,
+                elderly_id=user_id,
+                elderly_name=elderly_name,
+                session_id=session_id,
+                detection_data={
+                    "pain_type": pain_type,
+                    "confidence": round(pain_confidence, 3),
+                    "details": pain_details,
+                    "exercise_type": exercise_type,
+                    "recommendation": recommendation,
+                },
+            )
+            logger.info(f"🚨 Pain alert sent to caregivers for session {session_id} (user={user_id})")
+        except Exception as e:
+            logger.error(f"❌ Failed to send pain alert: {e}")
+    
+    # Send in background thread to avoid blocking frame processing
+    _threading.Thread(target=_send, daemon=True, name="pain-alert").start()
+
 
 # ── Diagnostic endpoints ───────────────────────────────────────────────────────
 @router.get("/diagnostic")
@@ -807,6 +898,73 @@ async def analyze_session_frame(session_id: str, request: FrameRequest):
             except Exception as pain_err:
                 logger.warning(f"  ⚠️ Face pain analysis error: {pain_err}")
                 result["facial_pain"] = {"detected": False, "error": str(pain_err)}
+        
+        # ── Caregiver Notification on Pain/Discomfort/Trembling ──────────────
+        # Check movement-based pain indicators
+        pain_ind = result.get("pain_indicators", {})
+        movement_pain_detected = pain_ind.get("detected", False)
+        movement_pain_confidence = pain_ind.get("confidence", 0)
+        movement_pain_recommendation = pain_ind.get("recommendation", "continue")
+        
+        # Check facial pain indicators
+        facial = result.get("facial_pain", {})
+        facial_pain_detected = facial.get("detected", False) and facial.get("pain_level") not in (None, "none")
+        facial_pain_confidence = (facial.get("confidence", 0) or 0) / 100.0  # Normalize to 0-1
+        
+        # Check trembling
+        trembling_detected = result.get("trembling_detected", False)
+        
+        # Determine the worst pain signal
+        should_notify = False
+        pain_type = "discomfort"
+        best_confidence = 0.0
+        combined_details = []
+        
+        if movement_pain_detected and movement_pain_confidence > 0.5:
+            should_notify = True
+            best_confidence = max(best_confidence, movement_pain_confidence)
+            pain_type = "movement_pain"
+            combined_details.extend(pain_ind.get("details", []))
+        
+        if facial_pain_detected and facial_pain_confidence > 0.5:
+            should_notify = True
+            best_confidence = max(best_confidence, facial_pain_confidence)
+            if facial.get("pain_level") in ("moderate", "severe"):
+                pain_type = "severe_pain"
+            else:
+                pain_type = "facial_pain"
+            combined_details.append(f"Facial pain: {facial.get('pain_level', 'unknown')}")
+        
+        if trembling_detected:
+            should_notify = True
+            best_confidence = max(best_confidence, 0.6)
+            pain_type = "trembling"
+            combined_details.append("Trembling/shaking detected")
+        
+        if should_notify:
+            exercise_type_str = session.exercise_type.value if hasattr(session.exercise_type, 'value') else str(session.exercise_type)
+            _notify_caregivers_of_pain(
+                session_id=session_id,
+                user_id=session.user_id,
+                pain_type=pain_type,
+                pain_confidence=best_confidence,
+                pain_details=combined_details,
+                exercise_type=exercise_type_str,
+                recommendation=movement_pain_recommendation,
+            )
+            
+            # Suspend session if pain is severe
+            if pain_type == "severe_pain" or best_confidence > 0.7:
+                session.state = SessionState.REST
+                result["session_suspended"] = True
+                result["suspension_reason"] = f"Exercise suspended due to {pain_type.replace('_', ' ')}. Caregivers have been notified."
+                result["message"] = "⚠️ Session paused — pain/discomfort detected. Your caregiver has been notified."
+                logger.warning(
+                    f"🛑 Session {session_id} SUSPENDED due to {pain_type} "
+                    f"(confidence={best_confidence:.0%}) for user {session.user_id}"
+                )
+            else:
+                result["caregiver_notified"] = True
         
         return result
         
@@ -1781,12 +1939,18 @@ async def get_or_create_today_plan(user_id: str):
     plan_generator = get_exercise_plan_generator()
     today = date_cls.today()
     
-    # Check if plan exists for today
+    # Check if plan exists for today (loads from Firestore then checks cache)
     plans = plan_generator.get_user_plans(user_id, days=1)
     today_plan = next((p for p in plans if p.date == today), None)
     
-    if not today_plan:
+    if today_plan:
+        logger.info(
+            f"📋 Loaded existing plan for user {user_id}: {today_plan.plan_id} "
+            f"(completed_exercises={today_plan.completed_exercises})"
+        )
+    else:
         # Generate new plan
+        logger.info(f"📋 No plan found for user {user_id} on {today}, generating new one...")
         today_plan = plan_generator.generate_daily_plan(user_id, today)
     
     return today_plan.to_dict()

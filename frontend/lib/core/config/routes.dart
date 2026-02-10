@@ -9,7 +9,6 @@ import '../../screens/auth/splash_screen.dart';
 import '../../screens/home/role_based_dashboard.dart';
 import '../../screens/physio/physio_home_screen.dart';
 import '../../screens/physio/tug_test_screen.dart';
-import '../../screens/physio/exercise_library_screen.dart';
 import '../../screens/physio/exercise_schedule_screen.dart';
 import '../../screens/physio/exercise_monitor_screen.dart';
 import '../../screens/nutrition/nutrition_home_screen.dart';
@@ -38,7 +37,6 @@ class AppRoutes {
   // Physio routes
   static const String physioHome = '/physio';
   static const String tugTest = '/physio/tug';
-  static const String exercises = '/physio/exercises';
   static const String exerciseSchedule = '/physio/schedule';
   static const String exerciseMonitor = '/physio/exercise-monitor';
   
@@ -82,8 +80,6 @@ class AppRoutes {
         return _slideRoute(const PhysioHomeScreen(), settings);
       case tugTest:
         return _slideRoute(const TUGTestScreen(), settings);
-      case exercises:
-        return _slideRoute(const ExerciseLibraryScreen(), settings);
       case exerciseSchedule:
         return _slideRoute(const ExerciseScheduleScreen(), settings);
       case exerciseMonitor:

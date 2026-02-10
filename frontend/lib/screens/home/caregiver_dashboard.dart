@@ -5,7 +5,6 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
@@ -43,14 +42,14 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
       final profile = ref.read(userProfileProvider);
       if (profile?.uid == null) return;
       
-      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
-      final response = await http.get(
-        Uri.parse('$baseUrl/guardian/alerts/${profile!.uid}'),
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/alerts/${profile!.uid}',
+        requireAuth: false,
       );
       
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final alerts = (data['alerts'] as List?) ?? [];
+      if (response.success && response.data != null) {
+        final alerts = (response.data!['alerts'] as List?) ?? [];
         final unacknowledged = alerts.where((a) => a['resolved'] != true).toList();
         if (mounted) {
           setState(() {
@@ -135,7 +134,7 @@ class _CaregiverDashboardState extends ConsumerState<CaregiverDashboard> {
   Widget _buildNavItem(int index, IconData icon, IconData activeIcon, String label, Color color) {
     final isSelected = _currentIndex == index;
     final isAlertsTab = index == 3; // Alerts tab
-    final badgeCount = isAlertsTab ? _unacknowledgedAlertCount : (index == 2 ? 5 : 0); // 5 for tasks demo
+    final badgeCount = isAlertsTab ? _unacknowledgedAlertCount : 0;
     
     return GestureDetector(
       onTap: () {
@@ -257,26 +256,26 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
       final profile = ref.read(userProfileProvider);
       if (profile?.uid == null) return;
       
-      // Fetch alerts for caregiver (they see alerts for their elderly connections)
-      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
-      final alertsResponse = await http.get(
-        Uri.parse('$baseUrl/guardian/alerts/${profile!.uid}?limit=10'),
+      // Fetch alerts using ApiService (correct URL with /api/ prefix)
+      final apiService = ref.read(apiServiceProvider);
+      final alertsResponse = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/alerts/${profile!.uid}?limit=10',
+        requireAuth: false,
       );
       
-      if (alertsResponse.statusCode == 200) {
-        final data = json.decode(alertsResponse.body);
-        final alertsList = (data['alerts'] as List?) ?? [];
+      if (alertsResponse.success && alertsResponse.data != null) {
+        final alertsList = (alertsResponse.data!['alerts'] as List?) ?? [];
+        final activeCount = alertsResponse.data!['active_count'] ?? 0;
         final unacknowledged = alertsList.where((a) => a['resolved'] != true).toList();
         if (mounted) {
           setState(() {
-            _recentAlerts = List<Map<String, dynamic>>.from(unacknowledged.take(5));
-            _alertCount = unacknowledged.length;
+            _recentAlerts = List<Map<String, dynamic>>.from(unacknowledged.take(5).map((a) => Map<String, dynamic>.from(a as Map)));
+            _alertCount = activeCount is int ? activeCount : int.tryParse('$activeCount') ?? unacknowledged.length;
           });
         }
       }
       
       // TODO: Fetch tasks count when tasks API is implemented
-      // For now, show 0 tasks
       if (mounted) setState(() => _taskCount = 0);
     } catch (e) {
       debugPrint('Error fetching caregiver data: $e');
@@ -365,6 +364,11 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
             
             // Today's Summary
             _buildDaySummaryCard(),
+            
+            const SizedBox(height: 16),
+            
+            // Alert Summary Card (prominent, like guardian dashboard)
+            _buildAlertSummaryCard(),
             
             const SizedBox(height: 20),
             
@@ -455,19 +459,10 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
               children: [
                 Expanded(
                   child: _buildQuickAction(
-                    icon: Icons.fitness_center,
-                    label: 'Prescribe\nExercise',
-                    color: AppColors.neonGreen,
-                    onTap: () {},
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildQuickAction(
                     icon: Icons.restaurant_menu,
                     label: 'Create\nMeal Plan',
                     color: AppColors.neonOrange,
-                    onTap: () {},
+                    onTap: () => widget.onNavigateToPatients(),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -476,7 +471,7 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
                     icon: Icons.assessment,
                     label: 'View\nReports',
                     color: AppColors.neonPurple,
-                    onTap: () {},
+                    onTap: () => widget.onNavigateToPatients(),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -670,6 +665,13 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
   }
 
   Widget _buildDaySummaryCard() {
+    final now = DateTime.now();
+    final months = ['January','February','March','April','May','June',
+        'July','August','September','October','November','December'];
+    final dateStr = '${months[now.month - 1]} ${now.day}, ${now.year}';
+    final connectionState = ref.watch(connectionProvider);
+    final patientCount = connectionState.myElderly.length;
+    
     return GlassmorphicCard(
       glowColor: AppColors.neonGreen,
       glowIntensity: 0.2,
@@ -688,11 +690,11 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
                 child: const Icon(Icons.today, color: AppColors.neonGreen),
               ),
               const SizedBox(width: 12),
-              const Expanded(
+              Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
+                    const Text(
                       'Today\'s Schedule',
                       style: TextStyle(
                         fontSize: 16,
@@ -701,8 +703,8 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
                       ),
                     ),
                     Text(
-                      'January 1, 2026',
-                      style: TextStyle(
+                      dateStr,
+                      style: const TextStyle(
                         fontSize: 12,
                         color: AppColors.textSecondary,
                       ),
@@ -716,11 +718,160 @@ class _CaregiverHomeTabState extends ConsumerState<_CaregiverHomeTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildDayStat('Completed', '3', AppColors.neonGreen),
-              _buildDayStat('Pending', '5', AppColors.neonOrange),
-              _buildDayStat('Overdue', '0', AppColors.neonRed),
+              _buildDayStat('Patients', '$patientCount', AppColors.neonGreen),
+              _buildDayStat('Alerts', '$_alertCount', _alertCount > 0 ? AppColors.neonOrange : AppColors.neonGreen),
+              _buildDayStat('Unresolved', '${_recentAlerts.length}', _recentAlerts.isNotEmpty ? AppColors.neonRed : AppColors.neonGreen),
             ],
           ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAlertSummaryCard() {
+    if (_alertCount == 0) {
+      return GlassmorphicCard(
+        glowColor: AppColors.neonGreen,
+        glowIntensity: 0.15,
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.neonGreen.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: const Icon(Icons.shield, color: AppColors.neonGreen, size: 24),
+            ),
+            const SizedBox(width: 14),
+            const Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'No Active Alerts',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.neonGreen,
+                    ),
+                  ),
+                  SizedBox(height: 2),
+                  Text(
+                    'All patients are safe',
+                    style: TextStyle(fontSize: 12, color: AppColors.textSecondary),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.check_circle, color: AppColors.neonGreen, size: 28),
+          ],
+        ),
+      );
+    }
+
+    // Active alerts — show prominent red card
+    final criticalCount = _recentAlerts.where((a) => a['severity'] == 'critical').length;
+    final latestAlert = _recentAlerts.isNotEmpty ? _recentAlerts.first : null;
+    final latestType = latestAlert?['type'] ?? 'alert';
+    final latestElderlyName = latestAlert?['elderly_name'] ?? latestAlert?['elderly_id'] ?? 'Patient';
+
+    return GlassmorphicCard(
+      glowColor: AppColors.neonRed,
+      glowIntensity: 0.3,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.neonRed.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.warning_amber_rounded, color: AppColors.neonRed, size: 24),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '$_alertCount Active Alert${_alertCount > 1 ? 's' : ''}',
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: AppColors.neonRed,
+                      ),
+                    ),
+                    if (criticalCount > 0)
+                      Text(
+                        '$criticalCount critical',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppColors.neonRed.withOpacity(0.8),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              // View button
+              GestureDetector(
+                onTap: () => widget.onNavigateToPatients(),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.neonRed.withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: AppColors.neonRed.withOpacity(0.4)),
+                  ),
+                  child: const Text(
+                    'View',
+                    style: TextStyle(
+                      color: AppColors.neonRed,
+                      fontWeight: FontWeight.w600,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (latestAlert != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: AppColors.neonRed.withOpacity(0.08),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(
+                    latestType == 'fall' ? Icons.warning 
+                        : latestType == 'gait' ? Icons.directions_walk
+                        : Icons.timer_off,
+                    color: AppColors.neonRed.withOpacity(0.7),
+                    size: 18,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Latest: ${latestType.toString().replaceAll('_', ' ')} · $latestElderlyName',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -2388,14 +2539,17 @@ class _CaregiverAlertsTabState extends ConsumerState<_CaregiverAlertsTab> {
       final profile = ref.read(userProfileProvider);
       if (profile?.uid == null) return;
       
-      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
-      final response = await http.get(Uri.parse('$baseUrl/guardian/alerts/${profile!.uid}?limit=50'));
+      final apiService = ref.read(apiServiceProvider);
+      final response = await apiService.get<Map<String, dynamic>>(
+        '${ApiConfig.guardian}/alerts/${profile!.uid}?limit=50',
+        requireAuth: false,
+      );
       
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body) as List<dynamic>;
+      if (response.success && response.data != null) {
+        final alertsList = (response.data!['alerts'] as List?) ?? [];
         if (mounted) {
           setState(() {
-            _alerts = List<Map<String, dynamic>>.from(data);
+            _alerts = List<Map<String, dynamic>>.from(alertsList.map((a) => Map<String, dynamic>.from(a as Map)));
           });
         }
       }
@@ -2671,11 +2825,10 @@ class _CaregiverAlertsTabState extends ConsumerState<_CaregiverAlertsTab> {
                 child: ElevatedButton(
                   onPressed: () async {
                     try {
-                      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
-                      await http.put(
-                        Uri.parse('$baseUrl/guardian/alerts/$alertId/acknowledge'),
-                        headers: {'Content-Type': 'application/json'},
-                        body: json.encode({'response_action': 'resolved', 'notes': ''}),
+                      final apiService = ref.read(apiServiceProvider);
+                      await apiService.put(
+                        '${ApiConfig.guardian}/alerts/$alertId/acknowledge',
+                        body: {'response_action': 'resolved', 'notes': ''},
                       );
                       if (mounted) Navigator.pop(context);
                       _fetchAlerts();
@@ -2868,18 +3021,19 @@ class _ReportsTabState extends ConsumerState<_ReportsTab> {
         return;
       }
       
-      final baseUrl = const String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
+      final apiService = ref.read(apiServiceProvider);
       Map<String, dynamic> reportData = {};
       
       switch (type) {
         case 'health_summary':
         case 'fall_risk':
           // Fetch alerts for summary
-          final alertsResponse = await http.get(
-            Uri.parse('$baseUrl/guardian/alerts/${profile!.uid}?limit=100'),
+          final alertsResponse = await apiService.get<Map<String, dynamic>>(
+            '${ApiConfig.guardian}/alerts/${profile!.uid}?limit=100',
+            requireAuth: false,
           );
-          if (alertsResponse.statusCode == 200) {
-            final alerts = json.decode(alertsResponse.body) as List<dynamic>;
+          if (alertsResponse.success && alertsResponse.data != null) {
+            final alerts = (alertsResponse.data!['alerts'] as List?) ?? [];
             final fallAlerts = alerts.where((a) => a['type'] == 'fall').length;
             final gaitAlerts = alerts.where((a) => a['type'] == 'gait').length;
             final inactivityAlerts = alerts.where((a) => a['type'] == 'inactivity').length;

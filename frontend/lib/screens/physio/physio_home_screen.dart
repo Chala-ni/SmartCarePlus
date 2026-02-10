@@ -239,7 +239,7 @@ class _PhysioHomeScreenState extends ConsumerState<PhysioHomeScreen> {
                       ),
                     ),
                     TextButton(
-                      onPressed: () => Navigator.pushNamed(context, AppRoutes.exercises),
+                      onPressed: () => Navigator.pushNamed(context, AppRoutes.exerciseSchedule),
                       child: const Text('View All', style: TextStyle(color: AppColors.neonCyan)),
                     ),
                   ],

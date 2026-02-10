@@ -448,6 +448,48 @@ class _ExerciseMonitorScreenState extends ConsumerState<ExerciseMonitorScreen> {
               _painRecommendation = pain['recommendation'] ?? 'continue';
             }
             
+            // Handle session suspension due to pain/discomfort
+            if (data['session_suspended'] == true) {
+              final reason = data['suspension_reason'] ?? 'Session paused due to discomfort';
+              _feedback = ['⚠️ $reason'];
+              _formQuality = 'Paused';
+              // Stop the session with a warning dialog
+              _frameTimer?.cancel();
+              Future.microtask(() {
+                if (mounted) {
+                  showDialog(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: const Color(0xFF1a1a2e),
+                      title: const Text(
+                        '⚠️ Exercise Paused',
+                        style: TextStyle(color: Colors.white),
+                      ),
+                      content: Text(
+                        reason,
+                        style: const TextStyle(color: Colors.white70),
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () {
+                            Navigator.of(ctx).pop();
+                            _stopSession(showSummary: true);
+                          },
+                          child: const Text('End Session'),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+              });
+            } else if (data['caregiver_notified'] == true) {
+              // Mild pain — caregiver notified but session continues
+              if (_feedback.isNotEmpty) {
+                _feedback.insert(0, 'Caregiver notified about discomfort');
+              }
+            }
+            
             // Check for set/session completion
             if (data['set_completed'] == true) {
               _setCompleted = true;

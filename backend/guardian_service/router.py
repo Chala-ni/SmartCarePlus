@@ -477,6 +477,8 @@ def _send_fcm_notification(alert: dict):
             notif_type = NotificationType.FALL_DETECTED
         elif alert_type == "inactivity":
             notif_type = NotificationType.INACTIVITY_ALERT
+        elif alert_type == "exercise_pain":
+            notif_type = NotificationType.EXERCISE_PAIN
         else:
             notif_type = NotificationType.FALL_DETECTED  # Default
         
@@ -859,14 +861,30 @@ async def trigger_sos(request: SOSRequest):
 
 @router.get("/alerts/{guardian_id}")
 async def get_alerts(guardian_id: str, status: Optional[str] = None, limit: int = 20):
-    """Get all alerts - from Firestore if available, otherwise from in-memory store."""
+    """Get alerts for a guardian/caregiver's connected elderly."""
     alerts = []
+    
+    # Get connected elderly IDs for this guardian/caregiver
+    connected_elderly_ids = set()
+    try:
+        db = get_db()
+        if db and not is_mock_mode():
+            connections = db.collection("connections").where(
+                "linked_user_id", "==", guardian_id
+            ).where("status", "==", "active").get()
+            for conn in connections:
+                conn_data = conn.to_dict()
+                eid = conn_data.get("elderly_id")
+                if eid:
+                    connected_elderly_ids.add(eid)
+    except Exception as e:
+        logger.warning(f"Failed to fetch connections for {guardian_id}: {e}")
     
     # Try Firestore first
     try:
         db = get_db()
         if db and not is_mock_mode():
-            query = db.collection("alerts").order_by("created_at", direction="DESCENDING").limit(limit)
+            query = db.collection("alerts").order_by("created_at", direction="DESCENDING").limit(limit * 2)
             docs = query.get()
             for doc in docs:
                 alert_data = doc.to_dict()
@@ -874,14 +892,24 @@ async def get_alerts(guardian_id: str, status: Optional[str] = None, limit: int 
                 # Convert Firestore timestamp to string if needed
                 if hasattr(alert_data.get("created_at"), "isoformat"):
                     alert_data["created_at"] = alert_data["created_at"].isoformat()
-                alerts = [alert_data for alert_data in [doc.to_dict() | {"id": doc.id} for doc in docs]]
+                # Filter by connected elderly (if connections found)
+                if connected_elderly_ids:
+                    if alert_data.get("elderly_id") in connected_elderly_ids:
+                        alerts.append(alert_data)
+                else:
+                    # No connections found — show all alerts (fallback for demo)
+                    alerts.append(alert_data)
     except Exception as e:
         logger.warning(f"Firestore alert fetch failed: {e}")
     
     # Fallback to in-memory store
     if not alerts:
         with _alerts_lock:
-            alerts = _alerts_store.copy()
+            all_alerts = _alerts_store.copy()
+        if connected_elderly_ids:
+            alerts = [a for a in all_alerts if a.get("elderly_id") in connected_elderly_ids]
+        else:
+            alerts = all_alerts
     
     # Filter by status
     if status == "active":

@@ -7,6 +7,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../core/services/notification_service.dart';
 
 /// User role enum
@@ -119,6 +121,19 @@ class AuthNotifier extends StateNotifier<AuthState> {
       final doc = await _firestore.collection('users').doc(user.uid).get();
       
       if (doc.exists) {
+        // Verify user with backend
+        final backendResult = await _verifyWithBackend(user);
+        
+        if (backendResult == false) {
+          // Backend explicitly rejected the user (401 or 404)
+          await _auth.signOut();
+          state = const AuthState(
+            error: 'Unable to verify account with server. Please try again.',
+          );
+          return;
+        }
+        // backendResult == true (verified) or null (server unavailable, allow gracefully)
+        
         state = AuthState(
           firebaseUser: user,
           profile: UserProfile.fromFirestore(doc),
@@ -127,13 +142,52 @@ class AuthNotifier extends StateNotifier<AuthState> {
         // Save FCM token for push notifications
         NotificationService().saveTokenToFirestore(user.uid);
       } else {
-        state = AuthState(firebaseUser: user);
+        // User exists in Firebase Auth but not in Firestore — reject
+        await _auth.signOut();
+        state = const AuthState(
+          error: 'Account not found. Please register first.',
+        );
       }
     } catch (e) {
       state = AuthState(
         firebaseUser: user,
         error: 'Failed to load profile: $e',
       );
+    }
+  }
+
+  /// Verify user exists in the backend
+  /// Returns: true if verified, false if rejected, null if server unavailable
+  Future<bool?> _verifyWithBackend(User user) async {
+    try {
+      final token = await user.getIdToken();
+      if (token == null) return false;
+      
+      const baseUrl = String.fromEnvironment('API_URL', defaultValue: 'http://10.0.2.2:8000');
+      final response = await http.get(
+        Uri.parse('$baseUrl/api/users/me'),
+        headers: {
+          'Authorization': 'Bearer $token',
+          'Content-Type': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 10));
+      
+      if (response.statusCode == 200) {
+        return true;
+      } else if (response.statusCode == 401) {
+        // Token invalid or expired
+        return false;
+      } else if (response.statusCode == 404) {
+        // User doesn't exist in backend
+        return false;
+      }
+      // Server error (500, etc.) - allow login gracefully
+      return null;
+    } catch (e) {
+      // Network error — server might be unavailable
+      // ignore: avoid_print
+      print('Backend verification error: $e');
+      return null;
     }
   }
 

@@ -242,7 +242,7 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
             const SizedBox(height: 24),
             
             // Today's Health Summary
-            _buildHealthSummaryCard(),
+            _buildHealthSummaryCard(todayPlan: todayPlan, bmi: bmi),
             
             const SizedBox(height: 20),
             
@@ -360,7 +360,7 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
                     time: exercise.category.replaceAll('_', ' '),
                     icon: Icons.fitness_center,
                     color: color,
-                    isCompleted: todayPlan.completed,
+                    isCompleted: todayPlan.isExerciseCompleted(exercise.exerciseId),
                   ),
                 );
               })
@@ -403,16 +403,6 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
                     label: 'Scan Food',
                     color: AppColors.neonOrange,
                     onTap: () => Navigator.pushNamed(context, AppRoutes.foodScanner),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: _buildQuickAction(
-                    context: context,
-                    icon: Icons.fitness_center,
-                    label: 'Start Exercise',
-                    color: AppColors.neonGreen,
-                    onTap: () => Navigator.pushNamed(context, AppRoutes.exercises),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -647,9 +637,66 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
     );
   }
 
-  Widget _buildHealthSummaryCard() {
+  Widget _buildHealthSummaryCard({DailyExercisePlan? todayPlan, BMIResult? bmi}) {
+    // Derive overall health status from available data
+    final exerciseProgress = todayPlan != null ? todayPlan.progress : 0.0;
+    final bmiCategory = bmi?.category ?? 'unknown';
+    
+    // Activity level based on exercise completion
+    String activityLabel;
+    Color activityColor;
+    if (exerciseProgress >= 1.0) {
+      activityLabel = 'Complete';
+      activityColor = AppColors.neonGreen;
+    } else if (exerciseProgress >= 0.5) {
+      activityLabel = 'Active';
+      activityColor = AppColors.neonCyan;
+    } else if (exerciseProgress > 0) {
+      activityLabel = 'Low';
+      activityColor = AppColors.neonOrange;
+    } else {
+      activityLabel = 'Inactive';
+      activityColor = AppColors.textSecondary;
+    }
+    
+    // BMI health status
+    String bmiLabel;
+    Color bmiColor;
+    if (bmi == null) {
+      bmiLabel = '--';
+      bmiColor = AppColors.textSecondary;
+    } else if (bmiCategory == 'normal') {
+      bmiLabel = 'Normal';
+      bmiColor = AppColors.neonGreen;
+    } else if (bmiCategory == 'overweight') {
+      bmiLabel = 'Overweight';
+      bmiColor = AppColors.neonOrange;
+    } else if (bmiCategory == 'underweight') {
+      bmiLabel = 'Underweight';
+      bmiColor = AppColors.neonOrange;
+    } else {
+      bmiLabel = bmi.displayCategory;
+      bmiColor = AppColors.neonRed;
+    }
+    
+    // Overall status
+    final bool isGood = exerciseProgress >= 0.5 && (bmiCategory == 'normal' || bmiCategory == 'overweight');
+    final Color overallColor = isGood ? AppColors.neonGreen : AppColors.neonOrange;
+    final String overallLabel = isGood ? 'Good' : 'Needs Attention';
+    final String overallMessage = isGood 
+        ? 'You\'re doing great today!'
+        : 'Stay active and follow your plan';
+    
+    // Exercise completed fraction
+    final String exerciseLabel = todayPlan != null 
+        ? '${todayPlan.completedExerciseCount}/${todayPlan.exerciseCount}'
+        : 'No Plan';
+    final Color exerciseColor = exerciseProgress >= 1.0 
+        ? AppColors.neonGreen 
+        : exerciseProgress > 0 ? AppColors.neonCyan : AppColors.textSecondary;
+
     return GlassmorphicCard(
-      glowColor: AppColors.neonGreen,
+      glowColor: overallColor,
       glowIntensity: 0.2,
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -660,16 +707,16 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
               Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: AppColors.neonGreen.withOpacity(0.15),
+                  color: overallColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: const Icon(Icons.health_and_safety, color: AppColors.neonGreen, size: 24),
+                child: Icon(Icons.health_and_safety, color: overallColor, size: 24),
               ),
               const SizedBox(width: 12),
-              const Column(
+              Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     'Health Status',
                     style: TextStyle(
                       fontSize: 16,
@@ -678,10 +725,10 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
                     ),
                   ),
                   Text(
-                    'You\'re doing great today!',
+                    overallMessage,
                     style: TextStyle(
                       fontSize: 13,
-                      color: AppColors.neonGreen,
+                      color: overallColor,
                     ),
                   ),
                 ],
@@ -690,19 +737,19 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
-                  color: AppColors.neonGreen.withOpacity(0.15),
+                  color: overallColor.withOpacity(0.15),
                   borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: AppColors.neonGreen.withOpacity(0.3)),
+                  border: Border.all(color: overallColor.withOpacity(0.3)),
                 ),
-                child: const Row(
+                child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.check_circle, color: AppColors.neonGreen, size: 16),
-                    SizedBox(width: 4),
+                    Icon(Icons.check_circle, color: overallColor, size: 16),
+                    const SizedBox(width: 4),
                     Text(
-                      'Good',
+                      overallLabel,
                       style: TextStyle(
-                        color: AppColors.neonGreen,
+                        color: overallColor,
                         fontWeight: FontWeight.w600,
                         fontSize: 12,
                       ),
@@ -718,9 +765,9 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceAround,
             children: [
-              _buildMiniStat('Fall Risk', 'Low', AppColors.neonGreen),
-              _buildMiniStat('Activity', 'Normal', AppColors.neonCyan),
-              _buildMiniStat('Mood', 'Happy', AppColors.neonPurple),
+              _buildMiniStat('BMI', bmiLabel, bmiColor),
+              _buildMiniStat('Exercises', exerciseLabel, exerciseColor),
+              _buildMiniStat('Activity', activityLabel, activityColor),
             ],
           ),
         ],
@@ -1228,7 +1275,7 @@ class _MyPhysioTabState extends ConsumerState<_MyPhysioTab> {
                               },
                             );
                           }
-                        : () => Navigator.pushNamed(context, AppRoutes.exercises),
+                        : () => Navigator.pushNamed(context, AppRoutes.physioHome),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -1580,8 +1627,8 @@ class _MyPhysioTabState extends ConsumerState<_MyPhysioTab> {
             },
           );
         } else {
-          // Fallback to exercise library
-          Navigator.pushNamed(context, AppRoutes.exercises);
+          // Fallback to physio home
+          Navigator.pushNamed(context, AppRoutes.physioHome);
         }
       },
       child: GlassmorphicCard(

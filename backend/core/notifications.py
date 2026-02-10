@@ -23,6 +23,7 @@ class NotificationType(str, Enum):
     SOS_ALERT = "sos_alert"
     GEOFENCE_EXIT = "geofence_exit"
     INACTIVITY_ALERT = "inactivity_alert"
+    EXERCISE_PAIN = "exercise_pain"
     
     # Health updates (normal priority)
     MEDICATION_REMINDER = "medication_reminder"
