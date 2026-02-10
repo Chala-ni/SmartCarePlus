@@ -177,6 +177,78 @@ def _notify_caregivers_of_pain(
     _threading.Thread(target=_send, daemon=True, name="pain-alert").start()
 
 
+def _notify_exercise_completion(user_id: str, plan_id: str, exercise_count: int):
+    """Send notification to caregivers when elder completes all exercises."""
+    import threading as _th
+    
+    def _send():
+        try:
+            from core.notifications import PushNotification, NotificationType, fcm_service
+            from core.database import get_db
+            
+            db = get_db()
+            if not db:
+                return
+            
+            # Get elder's name
+            user_doc = db.collection("users").document(user_id).get()
+            elderly_name = "Your elder"
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                elderly_name = user_data.get("displayName") or user_data.get("name", elderly_name)
+                
+                # Notify elder too
+                elder_token = user_data.get("fcmToken")
+                if elder_token:
+                    elder_notif = PushNotification(
+                        title="Great Job! 🎉",
+                        body=f"You completed all {exercise_count} exercises today!",
+                        notification_type=NotificationType.EXERCISE_REMINDER,
+                        data={"plan_id": plan_id, "type": "exercise_completed"},
+                    )
+                    fcm_service.send_to_device(elder_token, elder_notif)
+            
+            # Notify caregivers
+            connections = db.collection("connections").where(
+                "elderly_id", "==", user_id
+            ).where("status", "==", "accepted").stream()
+            
+            for conn in connections:
+                conn_data = conn.to_dict()
+                caregiver_id = conn_data.get("linked_user_id")
+                if caregiver_id:
+                    cg_doc = db.collection("users").document(caregiver_id).get()
+                    if cg_doc.exists:
+                        cg_data = cg_doc.to_dict()
+                        cg_token = cg_data.get("fcmToken")
+                        if cg_token:
+                            cg_notif = PushNotification(
+                                title=f"{elderly_name} completed exercises! 🎉",
+                                body=f"{elderly_name} finished all {exercise_count} exercises today.",
+                                notification_type=NotificationType.EXERCISE_REMINDER,
+                                data={"elderly_id": user_id, "type": "exercise_completed"},
+                            )
+                            fcm_service.send_to_device(cg_token, cg_notif)
+            
+            # Create Firestore alert too
+            db.collection("alerts").add({
+                "type": "exercise_completed",
+                "elderly_id": user_id,
+                "elderly_name": elderly_name,
+                "title": f"{elderly_name} completed exercises",
+                "description": f"Completed all {exercise_count} exercises today.",
+                "severity": "info",
+                "timestamp": datetime.now().isoformat(),
+                "acknowledged": False,
+            })
+            
+            logger.info(f"✅ Exercise completion notification sent for user {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to send exercise completion notification: {e}")
+    
+    _th.Thread(target=_send, daemon=True, name="exercise-complete-notif").start()
+
+
 # ── Diagnostic endpoints ───────────────────────────────────────────────────────
 @router.get("/diagnostic")
 async def physio_diagnostic():
@@ -1880,6 +1952,9 @@ async def complete_exercise_plan(plan_id: str, feedback: Optional[str] = None):
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
+    # Send completion notification to caregivers
+    _notify_exercise_completion(plan.user_id, plan_id, plan.exercise_count)
+    
     return {
         "status": "completed",
         "plan_id": plan_id,
@@ -1896,6 +1971,10 @@ async def complete_single_exercise(plan_id: str, exercise_id: str):
     if not plan:
         raise HTTPException(status_code=404, detail="Plan not found")
     
+    # If the entire plan is now complete, notify caregivers
+    if plan.completed:
+        _notify_exercise_completion(plan.user_id, plan_id, plan.exercise_count)
+    
     return {
         "status": "exercise_completed",
         "plan_id": plan_id,
@@ -1905,6 +1984,91 @@ async def complete_single_exercise(plan_id: str, exercise_id: str):
         "exercise_count": plan.exercise_count,
         "plan_completed": plan.completed,
     }
+
+
+@router.get("/check-exercise-reminder/{user_id}")
+async def check_exercise_reminder(user_id: str):
+    """
+    Check if the user has not started their exercises today and send reminder notifications.
+    Should be called periodically by the frontend.
+    """
+    from datetime import date as date_cls, datetime as dt_cls
+    import threading
+    
+    plan_generator = get_exercise_plan_generator()
+    today = date_cls.today()
+    now = dt_cls.now()
+    
+    # Only send reminders between 9 AM and 6 PM
+    if now.hour < 9 or now.hour > 18:
+        return {"reminder_sent": False, "reason": "outside_reminder_hours"}
+    
+    plans = plan_generator.get_user_plans(user_id, days=1)
+    today_plan = next((p for p in plans if p.date == today), None)
+    
+    if not today_plan:
+        return {"reminder_sent": False, "reason": "no_plan"}
+    
+    if today_plan.completed:
+        return {"reminder_sent": False, "reason": "already_completed"}
+    
+    if today_plan.completed_exercise_count > 0:
+        return {"reminder_sent": False, "reason": "in_progress"}
+    
+    # No exercises started — send reminder
+    def _send():
+        try:
+            from core.notifications import PushNotification, NotificationType, fcm_service
+            from core.database import get_db
+            
+            db = get_db()
+            if not db:
+                return
+            
+            # Get elder's FCM token
+            user_doc = db.collection("users").document(user_id).get()
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                fcm_token = user_data.get("fcmToken")
+                elderly_name = user_data.get("displayName") or user_data.get("name", "")
+                
+                if fcm_token:
+                    notification = PushNotification(
+                        title="Time for Your Exercises! 🏋️",
+                        body=f"You have {today_plan.exercise_count} exercises planned today. Stay active!",
+                        notification_type=NotificationType.EXERCISE_REMINDER,
+                        data={"plan_id": today_plan.plan_id, "type": "exercise_reminder"},
+                    )
+                    fcm_service.send_to_device(fcm_token, notification)
+                
+                # Also notify caregivers
+                connections = db.collection("connections").where(
+                    "elderly_id", "==", user_id
+                ).where("status", "==", "accepted").stream()
+                
+                for conn in connections:
+                    conn_data = conn.to_dict()
+                    caregiver_id = conn_data.get("linked_user_id")
+                    if caregiver_id:
+                        cg_doc = db.collection("users").document(caregiver_id).get()
+                        if cg_doc.exists:
+                            cg_data = cg_doc.to_dict()
+                            cg_token = cg_data.get("fcmToken")
+                            if cg_token:
+                                cg_notif = PushNotification(
+                                    title=f"{elderly_name} hasn't exercised yet",
+                                    body=f"{elderly_name} hasn't started today's {today_plan.exercise_count} exercises.",
+                                    notification_type=NotificationType.EXERCISE_REMINDER,
+                                    data={"elderly_id": user_id, "type": "exercise_reminder"},
+                                )
+                                fcm_service.send_to_device(cg_token, cg_notif)
+            
+            logger.info(f"📢 Exercise reminder sent for user {user_id}")
+        except Exception as e:
+            logger.error(f"❌ Failed to send exercise reminder: {e}")
+    
+    threading.Thread(target=_send, daemon=True, name="exercise-reminder").start()
+    return {"reminder_sent": True, "exercises_pending": today_plan.exercise_count}
 
 
 @router.get("/exercise-library")

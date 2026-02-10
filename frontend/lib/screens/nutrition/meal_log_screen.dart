@@ -10,6 +10,7 @@ import '../../core/constants/colors.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../core/services/api_service.dart';
 import '../../providers/nutrition_provider.dart';
+import '../../providers/auth_provider.dart';
 
 class MealLogScreen extends ConsumerStatefulWidget {
   const MealLogScreen({super.key});
@@ -62,17 +63,42 @@ class _MealLogScreenState extends ConsumerState<MealLogScreen> {
     try {
       final api = ref.read(apiServiceProvider);
       final response = await api.get('/api/nutrition/recent-foods');
+      if (!mounted) return;
       if (response.success && response.data != null && response.data['foods'] != null) {
         setState(() {
           _recentFoods = List<Map<String, dynamic>>.from(response.data['foods']);
         });
+      } else {
+        // API returned no foods — use local popular foods fallback
+        setState(() {
+          _recentFoods = _getPopularFoodsFallback();
+        });
       }
     } catch (e) {
-      // Fall back to empty list on error
       debugPrint('Error loading recent foods: $e');
+      if (!mounted) return;
+      // Fall back to popular foods on error
+      setState(() {
+        _recentFoods = _getPopularFoodsFallback();
+      });
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
+  }
+
+  List<Map<String, dynamic>> _getPopularFoodsFallback() {
+    return [
+      {'name': 'White Rice', 'calories': 130, 'serving': '100g', 'protein': 2.7, 'carbs': 28, 'fat': 0.3},
+      {'name': 'Grilled Chicken', 'calories': 165, 'serving': '100g', 'protein': 31, 'carbs': 0, 'fat': 3.6},
+      {'name': 'Dhal Curry', 'calories': 116, 'serving': '100g', 'protein': 9, 'carbs': 20, 'fat': 1},
+      {'name': 'Egg', 'calories': 155, 'serving': '1 large', 'protein': 13, 'carbs': 1, 'fat': 11},
+      {'name': 'Banana', 'calories': 89, 'serving': '1 medium', 'protein': 1, 'carbs': 23, 'fat': 0},
+      {'name': 'Bread', 'calories': 265, 'serving': '100g', 'protein': 9, 'carbs': 49, 'fat': 3},
+      {'name': 'Milk', 'calories': 42, 'serving': '100ml', 'protein': 3.4, 'carbs': 5, 'fat': 1},
+      {'name': 'Fish Curry', 'calories': 150, 'serving': '100g', 'protein': 18, 'carbs': 5, 'fat': 7},
+    ];
   }
 
   Future<void> _searchFoods(String query) async {
@@ -117,7 +143,7 @@ class _MealLogScreenState extends ConsumerState<MealLogScreen> {
     try {
       final api = ref.read(apiServiceProvider);
       final response = await api.post('/api/nutrition/log-meal', body: {
-        'user_id': 'current_user',
+        'user_id': ref.read(currentUserProvider)?.uid ?? 'demo_user',
         'meal_type': _selectedMealType.toLowerCase(),
         'foods': _selectedFoods.map((food) => {
           'name': food['name'],
@@ -131,7 +157,7 @@ class _MealLogScreenState extends ConsumerState<MealLogScreen> {
 
       if (response.success) {
         // Refresh nutrition data
-        ref.read(nutritionProvider.notifier).loadDailySummary('current_user');
+        ref.read(nutritionProvider.notifier).loadDailySummary(ref.read(currentUserProvider)?.uid ?? 'demo_user');
         
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -275,8 +301,12 @@ class _MealLogScreenState extends ConsumerState<MealLogScreen> {
                           ? IconButton(
                               icon: const Icon(Icons.clear, color: AppColors.textSecondary),
                               onPressed: () {
+                                _debounce?.cancel();
                                 _searchController.clear();
-                                setState(() {});
+                                setState(() {
+                                  _searchResults = [];
+                                  _isSearching = false;
+                                });
                               },
                             )
                           : null,

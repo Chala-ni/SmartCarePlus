@@ -4,6 +4,7 @@
 /// AI-powered food recognition using camera
 
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -26,6 +27,85 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
   Map<String, dynamic>? _detectedFood;
   File? _capturedImage;
   final ImagePicker _picker = ImagePicker();
+  
+  // ── Multi-food cart ──
+  final List<Map<String, dynamic>> _foodCart = [];
+
+  // ── Search from food list ──
+  final TextEditingController _searchController = TextEditingController();
+  List<Map<String, dynamic>> _searchResults = [];
+  bool _isSearching = false;
+  bool _showSearch = false;
+  Timer? _debounce;
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String query) {
+    _debounce?.cancel();
+    _debounce = Timer(const Duration(milliseconds: 400), () {
+      _searchFoods(query);
+    });
+  }
+
+  Future<void> _searchFoods(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() {
+        _searchResults = [];
+        _isSearching = false;
+      });
+      return;
+    }
+    setState(() => _isSearching = true);
+    try {
+      final api = ref.read(apiServiceProvider);
+      final response = await api.get('/api/nutrition/search', queryParams: {'query': query, 'limit': '10'});
+      if (response.success && response.data != null && response.data['results'] != null) {
+        setState(() {
+          _searchResults = List<Map<String, dynamic>>.from(
+            (response.data['results'] as List).map((item) => {
+              'name': item['name'] ?? item['description'] ?? 'Unknown',
+              'calories': _parseNum(item['calories_per_serving'] ?? item['calories'] ?? 0),
+              'protein': _parseNum(item['protein_g'] ?? item['protein'] ?? 0),
+              'carbs': _parseNum(item['carbs_g'] ?? item['carbohydrates'] ?? 0),
+              'fat': _parseNum(item['fat_g'] ?? item['fat'] ?? 0),
+              'fiber': _parseNum(item['fiber_g'] ?? item['fiber'] ?? 0),
+              'serving_size': item['serving_size'] ?? 100,
+              'serving_unit': item['serving_unit'] ?? 'g',
+            }),
+          );
+        });
+      }
+    } catch (e) {
+      debugPrint('Food search error: $e');
+    } finally {
+      if (mounted) setState(() => _isSearching = false);
+    }
+  }
+
+  void _selectSearchResult(Map<String, dynamic> food) {
+    setState(() {
+      _foodDetected = true;
+      _showSearch = false;
+      _detectedFood = {
+        'name': food['name'],
+        'confidence': 1.0,
+        'calories': food['calories'],
+        'protein': food['protein'],
+        'carbs': food['carbs'],
+        'fat': food['fat'],
+        'fiber': food['fiber'],
+        'servingSize': '${food['serving_size']}${food['serving_unit']}',
+        'alternatives': [],
+      };
+      _searchController.clear();
+      _searchResults = [];
+    });
+  }
 
   Future<void> _captureFromCamera() async {
     try {
@@ -356,7 +436,12 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
   }
   
   Future<void> _logMeal() async {
-    if (_detectedFood == null) return;
+    // Log all items in cart + current detected food (if any)
+    final allFoods = <Map<String, dynamic>>[..._foodCart];
+    if (_detectedFood != null && !_foodCart.any((f) => f['name'] == _detectedFood!['name'])) {
+      allFoods.add(_detectedFood!);
+    }
+    if (allFoods.isEmpty) return;
     
     setState(() => _isLoading = true);
     
@@ -364,24 +449,22 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
       final api = ref.read(apiServiceProvider);
       final userId = ref.read(currentUserProvider)?.uid ?? 'demo_user';
       
-      // Format the request to match backend MealLogRequest schema
       final response = await api.post('/api/nutrition/log-meal', body: {
         'user_id': userId,
         'meal_type': _getMealTypeFromTime(),
-        'foods': [
-          {
-            'name': _detectedFood!['name'],
-            'portion': 1.0,
-            'calories': _detectedFood!['calories'],
-            'protein': _detectedFood!['protein'],
-            'carbs': _detectedFood!['carbs'],
-            'fat': _detectedFood!['fat'],
-          }
-        ],
-        'notes': 'Logged via food scanner',
+        'foods': allFoods.map((f) => {
+          'name': f['name'],
+          'portion': 1.0,
+          'calories': f['calories'],
+          'protein': f['protein'],
+          'carbs': f['carbs'],
+          'fat': f['fat'],
+        }).toList(),
+        'notes': 'Logged via food scanner (${allFoods.length} items)',
       });
       
       if (mounted) {
+        final foodNames = allFoods.map((f) => f['name']).join(', ');
         if (response.success) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -389,7 +472,7 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
                 children: [
                   const Icon(Icons.check_circle, color: Colors.black),
                   const SizedBox(width: 8),
-                  Text('${_detectedFood!['name']} logged!'),
+                  Expanded(child: Text('${allFoods.length} item(s) logged!')),
                 ],
               ),
               backgroundColor: AppColors.neonGreen,
@@ -399,19 +482,19 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('Logged offline: ${_detectedFood!['name']}'),
+              content: Text('Logged offline: $foodNames'),
               backgroundColor: AppColors.neonOrange,
               behavior: SnackBarBehavior.floating,
             ),
           );
         }
-        Navigator.pop(context, true); // Return true to indicate meal was logged
+        Navigator.pop(context, true);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Saved locally: ${_detectedFood!['name']}'),
+            content: Text('Saved locally: ${allFoods.length} items'),
             backgroundColor: AppColors.neonOrange,
             behavior: SnackBarBehavior.floating,
           ),
@@ -422,6 +505,28 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
       setState(() => _isLoading = false);
     }
   }
+
+  void _addToCart() {
+    if (_detectedFood == null) return;
+    setState(() {
+      _foodCart.add(Map<String, dynamic>.from(_detectedFood!));
+      _resetScan();
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('${_detectedFood!['name']} added to cart (${_foodCart.length} items)'),
+        backgroundColor: AppColors.neonCyan,
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _removeFromCart(int index) {
+    setState(() => _foodCart.removeAt(index));
+  }
+
+  int get _cartTotalCalories => _foodCart.fold(0, (sum, f) => sum + ((f['calories'] as num?)?.toInt() ?? 0));
   
   String _getMealTypeFromTime() {
     final hour = DateTime.now().hour;
@@ -460,7 +565,29 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
                 child: Row(
                   children: [
                     GestureDetector(
-                      onTap: () => Navigator.pop(context),
+                      onTap: () {
+                        if (_foodCart.isNotEmpty) {
+                          showDialog(
+                            context: context,
+                            builder: (ctx) => AlertDialog(
+                              backgroundColor: AppColors.surface,
+                              title: const Text('Discard Cart?', style: TextStyle(color: AppColors.textPrimary)),
+                              content: Text('You have ${_foodCart.length} item(s) in your cart. Log them before leaving?',
+                                style: const TextStyle(color: AppColors.textSecondary)),
+                              actions: [
+                                TextButton(onPressed: () { Navigator.pop(ctx); Navigator.pop(context); }, child: const Text('Discard')),
+                                ElevatedButton(
+                                  onPressed: () { Navigator.pop(ctx); _logMeal(); },
+                                  style: ElevatedButton.styleFrom(backgroundColor: AppColors.neonGreen, foregroundColor: Colors.black),
+                                  child: const Text('Log All'),
+                                ),
+                              ],
+                            ),
+                          );
+                        } else {
+                          Navigator.pop(context);
+                        }
+                      },
                       child: Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
@@ -621,8 +748,87 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
               
               const SizedBox(height: 20),
               
+              // Food cart display
+              if (_foodCart.isNotEmpty && !_foodDetected)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20),
+                  child: GlassmorphicCard(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Icon(Icons.shopping_cart, size: 16, color: AppColors.neonCyan),
+                            const SizedBox(width: 8),
+                            Text(
+                              'Food Cart (${_foodCart.length})',
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
+                            ),
+                            const Spacer(),
+                            Text(
+                              '$_cartTotalCalories cal',
+                              style: const TextStyle(fontSize: 13, color: AppColors.neonOrange, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        ...List.generate(_foodCart.length, (i) {
+                          final f = _foodCart[i];
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 4),
+                            child: Row(
+                              children: [
+                                const Icon(Icons.circle, size: 6, color: AppColors.neonGreen),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: Text(
+                                    f['name'] ?? 'Food',
+                                    style: const TextStyle(fontSize: 13, color: AppColors.textPrimary),
+                                  ),
+                                ),
+                                Text(
+                                  '${(f['calories'] as num?)?.toInt() ?? 0} cal',
+                                  style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                ),
+                                const SizedBox(width: 8),
+                                GestureDetector(
+                                  onTap: () => _removeFromCart(i),
+                                  child: const Icon(Icons.close, size: 14, color: AppColors.textSecondary),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: _isLoading ? null : _logMeal,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.neonGreen,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(vertical: 10),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                            ),
+                            child: Text(
+                              'Log ${_foodCart.length} Item(s)',
+                              style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              
+              if (_foodCart.isNotEmpty && !_foodDetected)
+                const SizedBox(height: 12),
+              
               // Results or Scan Button
-              if (_foodDetected && _detectedFood != null)
+              if (_showSearch)
+                _buildSearchPanel()
+              else if (_foodDetected && _detectedFood != null)
                 _buildFoodResults()
               else
                 _buildScanButton(),
@@ -679,7 +885,7 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
               ),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           Text(
             _isScanning ? 'Scanning...' : 'Tap to scan food',
             style: const TextStyle(
@@ -687,7 +893,148 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
               color: AppColors.textSecondary,
             ),
           ),
+          const SizedBox(height: 12),
+          GestureDetector(
+            onTap: () => setState(() => _showSearch = true),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.glassBorder),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.search, size: 16, color: AppColors.neonGreen),
+                  SizedBox(width: 6),
+                  Text(
+                    'Or search food manually',
+                    style: TextStyle(fontSize: 12, color: AppColors.neonGreen, fontWeight: FontWeight.w500),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildSearchPanel() {
+    return Expanded(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 20),
+        child: Column(
+          children: [
+            // Search input
+            Container(
+              decoration: BoxDecoration(
+                color: AppColors.surfaceLight,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppColors.glassBorder),
+              ),
+              child: TextField(
+                controller: _searchController,
+                autofocus: true,
+                style: const TextStyle(color: AppColors.textPrimary),
+                decoration: InputDecoration(
+                  hintText: 'Search from food list...',
+                  hintStyle: const TextStyle(color: AppColors.textSecondary),
+                  prefixIcon: const Icon(Icons.search, color: AppColors.textSecondary),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.close, color: AppColors.textSecondary),
+                    onPressed: () {
+                      setState(() {
+                        _showSearch = false;
+                        _searchController.clear();
+                        _searchResults = [];
+                      });
+                    },
+                  ),
+                  border: InputBorder.none,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                ),
+                onChanged: _onSearchChanged,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Search results
+            Expanded(
+              child: _isSearching
+                  ? const Center(child: CircularProgressIndicator())
+                  : _searchResults.isEmpty
+                      ? Center(
+                          child: Text(
+                            _searchController.text.isEmpty
+                                ? 'Type to search foods from our database'
+                                : 'No foods found',
+                            style: const TextStyle(color: AppColors.textSecondary, fontSize: 13),
+                          ),
+                        )
+                      : ListView.builder(
+                          itemCount: _searchResults.length,
+                          itemBuilder: (context, index) {
+                            final food = _searchResults[index];
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 8),
+                              child: GestureDetector(
+                                onTap: () => _selectSearchResult(food),
+                                child: GlassmorphicCard(
+                                  padding: const EdgeInsets.all(12),
+                                  child: Row(
+                                    children: [
+                                      Container(
+                                        width: 40,
+                                        height: 40,
+                                        decoration: BoxDecoration(
+                                          color: AppColors.neonGreen.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(8),
+                                        ),
+                                        child: const Icon(Icons.restaurant, color: AppColors.neonGreen, size: 18),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              food['name'] ?? '',
+                                              style: const TextStyle(
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.textPrimary,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              '${food['serving_size']}${food['serving_unit']} • ${_parseNum(food['protein']).toInt()}g protein',
+                                              style: const TextStyle(fontSize: 11, color: AppColors.textSecondary),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      Text(
+                                        '${_parseNum(food['calories']).toInt()} cal',
+                                        style: const TextStyle(
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.neonOrange,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 8),
+                                      const Icon(Icons.add_circle_outline, color: AppColors.neonGreen, size: 20),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -789,9 +1136,31 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
                 height: 60,
                 child: ListView.separated(
                   scrollDirection: Axis.horizontal,
-                  itemCount: alternatives.length,
+                  itemCount: alternatives.length + 1,  // +1 for search button
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, index) {
+                    // Last item = search button
+                    if (index == alternatives.length) {
+                      return GestureDetector(
+                        onTap: () => setState(() => _showSearch = true),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                          decoration: BoxDecoration(
+                            color: AppColors.neonGreen.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: AppColors.neonGreen.withOpacity(0.3)),
+                          ),
+                          child: const Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.search, size: 18, color: AppColors.neonGreen),
+                              SizedBox(height: 2),
+                              Text('Search', style: TextStyle(fontSize: 10, color: AppColors.neonGreen, fontWeight: FontWeight.w500)),
+                            ],
+                          ),
+                        ),
+                      );
+                    }
                     final alt = alternatives[index] as Map<String, dynamic>;
                     final altConfidence = _parseNum(alt['confidence']) * 100;
                     return GestureDetector(
@@ -845,28 +1214,85 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
               ),
             ],
             
+            // Search instead link (always shown)
+            if (alternatives.isEmpty) ...[
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () => setState(() => _showSearch = true),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceLight,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: AppColors.glassBorder),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.search, size: 16, color: AppColors.neonGreen),
+                      SizedBox(width: 6),
+                      Text('Search from food list', style: TextStyle(fontSize: 12, color: AppColors.neonGreen, fontWeight: FontWeight.w500)),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            
             const Spacer(),
             
             // Action buttons
+            if (_foodCart.isNotEmpty) ...[
+              // Show cart summary
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppColors.neonCyan.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppColors.neonCyan.withOpacity(0.3)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.shopping_cart, size: 16, color: AppColors.neonCyan),
+                    const SizedBox(width: 8),
+                    Text(
+                      '${_foodCart.length} item(s) • $_cartTotalCalories cal',
+                      style: const TextStyle(fontSize: 12, color: AppColors.neonCyan, fontWeight: FontWeight.w600),
+                    ),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => setState(() => _foodCart.clear()),
+                      child: const Icon(Icons.clear, size: 16, color: AppColors.textSecondary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
             Row(
               children: [
                 Expanded(
                   child: OutlinedButton(
-                    onPressed: _resetScan,
+                    onPressed: _addToCart,
                     style: OutlinedButton.styleFrom(
-                      foregroundColor: AppColors.textSecondary,
-                      side: const BorderSide(color: AppColors.glassBorder),
+                      foregroundColor: AppColors.neonCyan,
+                      side: const BorderSide(color: AppColors.neonCyan),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(
                         borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                    child: const Text('Scan Again'),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        const Icon(Icons.add_shopping_cart, size: 16),
+                        const SizedBox(width: 4),
+                        Text(_foodCart.isEmpty ? 'Add & Scan More' : 'Add More', style: const TextStyle(fontSize: 12)),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  flex: 2,
                   child: ElevatedButton(
                     onPressed: _isLoading ? null : _logMeal,
                     style: ElevatedButton.styleFrom(
@@ -886,14 +1312,14 @@ class _FoodScannerScreenState extends ConsumerState<FoodScannerScreen> {
                               valueColor: AlwaysStoppedAnimation<Color>(Colors.black),
                             ),
                           )
-                        : const Row(
+                        : Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: [
-                              Icon(Icons.add),
-                              SizedBox(width: 6),
+                              const Icon(Icons.check),
+                              const SizedBox(width: 4),
                               Text(
-                                'Add to Meal',
-                                style: TextStyle(fontWeight: FontWeight.w600),
+                                _foodCart.isEmpty ? 'Log Food' : 'Log All (${_foodCart.length + 1})',
+                                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 12),
                               ),
                             ],
                           ),

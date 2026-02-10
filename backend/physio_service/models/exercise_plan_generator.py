@@ -1241,7 +1241,6 @@ class ExercisePlanGenerator:
     
     def __init__(self):
         self._plans: Dict[str, DailyExercisePlan] = {}
-        self._plan_counter = 0
         self._db = None
         self._init_firestore()
     
@@ -1421,9 +1420,9 @@ class ExercisePlanGenerator:
         else:
             difficulty = self._determine_difficulty(profile, pain_history)
         
-        # Generate plan ID
-        self._plan_counter += 1
-        plan_id = f"plan_{user_id}_{plan_date.isoformat()}_{self._plan_counter}"
+        # Generate plan ID using UUID to avoid collisions after server restart
+        import uuid
+        plan_id = f"plan_{user_id}_{plan_date.isoformat()}_{uuid.uuid4().hex[:8]}"
         
         # Create plan
         plan = DailyExercisePlan(

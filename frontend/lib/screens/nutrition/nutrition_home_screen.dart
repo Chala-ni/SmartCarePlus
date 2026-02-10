@@ -9,6 +9,7 @@ import '../../core/constants/colors.dart';
 import '../../core/config/routes.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/nutrition_provider.dart';
+import '../../providers/auth_provider.dart';
 import '../../core/services/api_service.dart';
 
 class NutritionHomeScreen extends ConsumerStatefulWidget {
@@ -33,12 +34,14 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
     });
   }
 
+  String get _userId => ref.read(currentUserProvider)?.uid ?? 'demo_user';
+
   Future<void> _loadNutritionData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
     try {
       final api = ref.read(apiServiceProvider);
-      final userId = 'current_user';
+      final userId = _userId;
 
       // Load daily summary
       final summaryResponse = await api.get('/api/nutrition/daily-summary/$userId');
@@ -56,6 +59,9 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
       if (_dailySummary['meals'] != null) {
         _todaysMeals = List<Map<String, dynamic>>.from(_dailySummary['meals']);
       }
+      
+      // Check for skipped meals (triggers notifications if needed)
+      _checkMealSkips();
     } catch (e) {
       debugPrint('Error loading nutrition data: $e');
     } finally {
@@ -69,8 +75,9 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
     try {
       final api = ref.read(apiServiceProvider);
       await api.post('/api/nutrition/hydration/log', body: {
-        'user_id': 'current_user',
-        'glasses': 1,
+        'user_id': _userId,
+        'amount_ml': 250,
+        'beverage_type': 'water',
       });
       setState(() {
         _hydrationGlasses = (_hydrationGlasses + 1).clamp(0, _hydrationGoal);
@@ -80,6 +87,13 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
     }
   }
 
+  Future<void> _checkMealSkips() async {
+    try {
+      final api = ref.read(apiServiceProvider);
+      await api.get('/api/nutrition/check-meal-skips/$_userId');
+    } catch (_) {}
+  }
+
   num _parseNum(dynamic value) {
     if (value == null) return 0;
     if (value is num) return value;
@@ -87,18 +101,25 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
     return 0;
   }
 
+  num _getNutrient(String key, String field) {
+    final val = _dailySummary[key];
+    if (val is Map) return _parseNum(val[field]);
+    if (field == 'consumed') return _parseNum(val);
+    return 0;
+  }
+
   @override
   Widget build(BuildContext context) {
-    final caloriesConsumed = _parseNum(_dailySummary['total_calories'] ?? 0);
-    final caloriesTarget = _parseNum(_dailySummary['target_calories'] ?? 1800);
-    final protein = _parseNum(_dailySummary['protein'] ?? 0);
-    final proteinTarget = _parseNum(_dailySummary['protein_target'] ?? 80);
-    final carbs = _parseNum(_dailySummary['carbs'] ?? 0);
-    final carbsTarget = _parseNum(_dailySummary['carbs_target'] ?? 220);
-    final fat = _parseNum(_dailySummary['fat'] ?? 0);
-    final fatTarget = _parseNum(_dailySummary['fat_target'] ?? 60);
-    final fiber = _parseNum(_dailySummary['fiber'] ?? 0);
-    final fiberTarget = _parseNum(_dailySummary['fiber_target'] ?? 25);
+    final caloriesConsumed = _parseNum(_dailySummary['total_calories'] ?? _getNutrient('calories', 'consumed'));
+    final caloriesTarget = _parseNum(_dailySummary['target_calories'] ?? _getNutrient('calories', 'goal'));
+    final protein = _getNutrient('protein', 'consumed');
+    final proteinTarget = _getNutrient('protein', 'goal');
+    final carbs = _getNutrient('carbohydrates', 'consumed');
+    final carbsTarget = _getNutrient('carbohydrates', 'goal');
+    final fat = _getNutrient('fat', 'consumed');
+    final fatTarget = _getNutrient('fat', 'goal');
+    final fiber = _getNutrient('fiber', 'consumed');
+    final fiberTarget = _getNutrient('fiber', 'goal');
 
     return Scaffold(
       body: Container(
@@ -274,6 +295,7 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               Row(
+                                mainAxisSize: MainAxisSize.min,
                                 children: [
                                   Container(
                                     padding: const EdgeInsets.all(8),
@@ -294,29 +316,35 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
                                   ),
                                 ],
                               ),
-                              Row(
-                                children: [
-                                  Text(
-                                    '$_hydrationGlasses / $_hydrationGoal glasses',
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.neonPurple,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  GestureDetector(
-                                    onTap: _addWaterGlass,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(4),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.neonPurple.withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(6),
+                              Flexible(
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        '$_hydrationGlasses / $_hydrationGoal glasses',
+                                        style: const TextStyle(
+                                          fontSize: 14,
+                                          color: AppColors.neonPurple,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                        overflow: TextOverflow.ellipsis,
                                       ),
-                                      child: const Icon(Icons.add, color: AppColors.neonPurple, size: 18),
                                     ),
-                                  ),
-                                ],
+                                    const SizedBox(width: 8),
+                                    GestureDetector(
+                                      onTap: _addWaterGlass,
+                                      child: Container(
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          color: AppColors.neonPurple.withOpacity(0.15),
+                                          borderRadius: BorderRadius.circular(6),
+                                        ),
+                                        child: const Icon(Icons.add, color: AppColors.neonPurple, size: 18),
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ],
                           ),
@@ -331,8 +359,10 @@ class _NutritionHomeScreenState extends ConsumerState<NutritionHomeScreen> {
                             ),
                           ),
                           const SizedBox(height: 10),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          Wrap(
+                            alignment: WrapAlignment.center,
+                            spacing: 6,
+                            runSpacing: 6,
                             children: List.generate(_hydrationGoal, (index) {
                               final filled = index < _hydrationGlasses;
                               return GestureDetector(

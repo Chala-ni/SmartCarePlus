@@ -14,7 +14,6 @@ import '../../core/services/api_service.dart';
 import '../../widgets/common/glassmorphic_card.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/connection_provider.dart';
-import '../../providers/nutrition_provider.dart';
 import '../../providers/physio_provider.dart';
 
 class ElderlyDashboard extends ConsumerStatefulWidget {
@@ -409,10 +408,10 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
                 Expanded(
                   child: _buildQuickAction(
                     context: context,
-                    icon: Icons.add,
-                    label: 'Log Water',
+                    icon: Icons.water_drop,
+                    label: 'Hydration',
                     color: AppColors.neonBlue,
-                    onTap: () => _logWater(context),
+                    onTap: _showHydrationSheet,
                   ),
                 ),
               ],
@@ -713,27 +712,30 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
                 child: Icon(Icons.health_and_safety, color: overallColor, size: 24),
               ),
               const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Health Status',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Health Status',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
-                  ),
-                  Text(
-                    overallMessage,
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: overallColor,
+                    Text(
+                      overallMessage,
+                      style: TextStyle(
+                        fontSize: 13,
+                        color: overallColor,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
-              const Spacer(),
+              const SizedBox(width: 8),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
@@ -923,6 +925,127 @@ class _ElderlyHomeTabState extends ConsumerState<_ElderlyHomeTab> {
         ],
       ),
     );
+  }
+
+  void _showHydrationSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppColors.neonPurple.withOpacity(0.15),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.water_drop, color: AppColors.neonPurple, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text(
+                    'Log Hydration',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppColors.textPrimary),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              const Text(
+                'Select a beverage to log',
+                style: TextStyle(fontSize: 14, color: AppColors.textSecondary),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                children: [
+                  Expanded(child: _buildBeverageButton('Water', Icons.water_drop, Colors.blue, 250)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _buildBeverageButton('Tea', Icons.emoji_food_beverage, Colors.orange, 200)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(child: _buildBeverageButton('Coffee', Icons.coffee, Colors.brown, 150)),
+                  const SizedBox(width: 12),
+                  Expanded(child: _buildBeverageButton('Juice', Icons.local_drink, Colors.green, 200)),
+                ],
+              ),
+              const SizedBox(height: 16),
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(context);
+                  Navigator.pushNamed(context, AppRoutes.hydration);
+                },
+                child: const Text('View Full History →', style: TextStyle(color: AppColors.neonCyan)),
+              ),
+              const SizedBox(height: 8),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildBeverageButton(String name, IconData icon, Color color, int ml) {
+    return GestureDetector(
+      onTap: () async {
+        Navigator.pop(context);
+        await _logHydration(ml, name);
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 32),
+            const SizedBox(height: 8),
+            Text(name, style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: color)),
+            const SizedBox(height: 4),
+            Text('$ml ml', style: TextStyle(fontSize: 11, color: color.withOpacity(0.7))),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _logHydration(int amountMl, String beverageType) async {
+    try {
+      final api = ref.read(apiServiceProvider);
+      final userId = ref.read(currentUserProvider)?.uid ?? 'demo_user';
+      await api.post('/api/nutrition/hydration/log', body: {
+        'user_id': userId,
+        'amount_ml': amountMl,
+        'beverage_type': beverageType,
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Logged $amountMl ml of $beverageType'),
+            backgroundColor: AppColors.neonPurple,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to log: $e'), backgroundColor: Colors.red),
+        );
+      }
+    }
   }
 
   Widget _buildQuickAction({
@@ -1816,10 +1939,13 @@ class _MyNutritionTab extends ConsumerStatefulWidget {
   ConsumerState<_MyNutritionTab> createState() => _MyNutritionTabState();
 }
 
-class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
+class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> with AutomaticKeepAliveClientMixin {
   bool _isLoading = true;
   String? _error;
   
+  @override
+  bool get wantKeepAlive => true;
+
   // Today's logged meals from API
   List<Map<String, dynamic>> _todaysMeals = [];
   int _caloriesConsumed = 0;
@@ -1841,6 +1967,22 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
     });
   }
 
+  // Helper to parse numeric values safely
+  num _parseNum(dynamic value) {
+    if (value == null) return 0;
+    if (value is num) return value;
+    if (value is String) return num.tryParse(value) ?? 0;
+    return 0;
+  }
+
+  // Helper to extract nutrient value from potentially nested dict
+  num _getNutrient(Map<String, dynamic> data, String key, String field) {
+    final val = data[key];
+    if (val is Map) return _parseNum(val[field]);
+    if (field == 'consumed') return _parseNum(val);
+    return 0;
+  }
+
   Future<void> _loadNutritionData() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
@@ -1848,67 +1990,81 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
     try {
       final user = ref.read(currentUserProvider);
       final userId = user?.uid ?? 'demo_user';
+      final api = ref.read(apiServiceProvider);
       
-      // Load daily summary
-      await ref.read(nutritionProvider.notifier).loadDailySummary(userId);
-      await ref.read(nutritionProvider.notifier).loadHydration(userId);
-      
-      if (!mounted) return;
-      final state = ref.read(nutritionProvider);
-      
-      if (state.summary != null) {
+      // Load daily summary directly from API (bypasses provider parsing issues)
+      final summaryResponse = await api.get('/api/nutrition/daily-summary/$userId');
+      if (summaryResponse.success && summaryResponse.data != null) {
+        final data = Map<String, dynamic>.from(summaryResponse.data);
+        
+        if (!mounted) return;
         setState(() {
-          _caloriesConsumed = state.summary!.caloriesConsumed;
-          _caloriesGoal = state.summary!.caloriesGoal;
-          _proteinConsumed = state.summary!.proteinConsumed;
-          _proteinGoal = state.summary!.proteinGoal;
-          _carbsConsumed = state.summary!.carbsConsumed;
-          _carbsGoal = state.summary!.carbsGoal;
-          _fatConsumed = state.summary!.fatConsumed;
-          _fatGoal = state.summary!.fatGoal;
+          _caloriesConsumed = _parseNum(data['total_calories'] ?? _getNutrient(data, 'calories', 'consumed')).toInt();
+          _caloriesGoal = _parseNum(data['target_calories'] ?? _getNutrient(data, 'calories', 'goal')).toInt();
+          _proteinConsumed = _getNutrient(data, 'protein', 'consumed').toDouble();
+          _proteinGoal = _getNutrient(data, 'protein', 'goal').toDouble();
+          _carbsConsumed = _getNutrient(data, 'carbohydrates', 'consumed').toDouble();
+          _carbsGoal = _getNutrient(data, 'carbohydrates', 'goal').toDouble();
+          _fatConsumed = _getNutrient(data, 'fat', 'consumed').toDouble();
+          _fatGoal = _getNutrient(data, 'fat', 'goal').toDouble();
           
-          // Convert meals to the format we need
-          _todaysMeals = state.summary!.meals.map((m) => {
-            'type': m.type,
-            'name': m.name,
-            'calories': m.calories,
-            'time': m.time,
-          }).toList();
+          // Extract meals directly from API response
+          if (data['meals'] != null) {
+            _todaysMeals = List<Map<String, dynamic>>.from(data['meals']);
+          }
         });
       }
       
-      if (state.hydration != null) {
+      // Load hydration data directly from API
+      final hydrationResponse = await api.get('/api/nutrition/hydration/$userId');
+      if (hydrationResponse.success && hydrationResponse.data != null) {
+        if (!mounted) return;
         setState(() {
-          _hydrationGlasses = state.hydration!.glasses;
-          _hydrationGoal = state.hydration!.goalGlasses;
+          _hydrationGlasses = (hydrationResponse.data['glasses'] as num?)?.toInt() ?? 0;
+          _hydrationGoal = (hydrationResponse.data['goal_glasses'] as num?)?.toInt() ?? 8;
         });
       }
       
-      setState(() {
-        _isLoading = false;
-        _error = state.error;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _error = null;
+        });
+      }
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _error = e.toString();
-      });
+      debugPrint('Error loading nutrition data: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _error = e.toString();
+        });
+      }
     }
   }
 
   Future<void> _addWater() async {
-    final user = ref.read(currentUserProvider);
-    final userId = user?.uid ?? 'demo_user';
-    
-    await ref.read(nutritionProvider.notifier).logHydration(userId, 250, 'water');
-    
-    setState(() {
-      _hydrationGlasses++;
-    });
+    try {
+      final user = ref.read(currentUserProvider);
+      final userId = user?.uid ?? 'demo_user';
+      final api = ref.read(apiServiceProvider);
+      
+      await api.post('/api/nutrition/hydration/log', body: {
+        'user_id': userId,
+        'amount_ml': 250,
+        'beverage_type': 'water',
+      });
+      
+      setState(() {
+        _hydrationGlasses = (_hydrationGlasses + 1).clamp(0, _hydrationGoal);
+      });
+    } catch (e) {
+      debugPrint('Error logging water: $e');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
     return SafeArea(
       child: RefreshIndicator(
         onRefresh: _loadNutritionData,
@@ -2019,7 +2175,7 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
                       icon: Icons.calendar_month,
                       label: 'Meal\nPlan',
                       color: AppColors.neonGreen,
-                      onTap: () => Navigator.pushNamed(context, AppRoutes.mealPlan),
+                      onTap: () => Navigator.pushNamed(context, AppRoutes.mealPlan).then((_) => _loadNutritionData()),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -2027,9 +2183,9 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
                     child: _buildNutritionAction(
                       context: context,
                       icon: Icons.bar_chart,
-                      label: 'Weekly\nReport',
+                      label: 'Nutrition\nSummary',
                       color: AppColors.neonPurple,
-                      onTap: () => Navigator.pushNamed(context, AppRoutes.nutritionHome),
+                      onTap: () => Navigator.pushNamed(context, AppRoutes.nutritionHome).then((_) => _loadNutritionData()),
                     ),
                   ),
                 ],
@@ -2118,38 +2274,44 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Calories Today',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.textPrimary,
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Calories Today',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.textPrimary,
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 4),
-                  Row(
-                    children: [
-                      Text(
-                        '$_caloriesConsumed',
-                        style: const TextStyle(
-                          fontSize: 32,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.neonOrange,
-                        ),
+                    const SizedBox(height: 4),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Row(
+                        children: [
+                          Text(
+                            '$_caloriesConsumed',
+                            style: const TextStyle(
+                              fontSize: 32,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.neonOrange,
+                            ),
+                          ),
+                          Text(
+                            ' / $_caloriesGoal',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ],
                       ),
-                      Text(
-                        ' / $_caloriesGoal',
-                        style: const TextStyle(
-                          fontSize: 18,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
+                    ),
+                  ],
+                ),
               ),
               SizedBox(
                 width: 70,
@@ -2216,60 +2378,60 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
   Widget _buildHydrationCard() {
     final progress = _hydrationGoal > 0 ? _hydrationGlasses / _hydrationGoal : 0.0;
     
-    return GlassmorphicCard(
-      glowColor: AppColors.neonBlue,
-      glowIntensity: 0.15,
-      padding: const EdgeInsets.all(16),
-      child: Row(
-        children: [
-          const Icon(Icons.water_drop, color: AppColors.neonBlue, size: 32),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Hydration',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: AppColors.textPrimary,
+    return GestureDetector(
+      onTap: () => Navigator.pushNamed(context, AppRoutes.hydration).then((_) => _loadNutritionData()),
+      child: GlassmorphicCard(
+        glowColor: AppColors.neonBlue,
+        glowIntensity: 0.15,
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            const Icon(Icons.water_drop, color: AppColors.neonBlue, size: 32),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Hydration',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.textPrimary,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 8),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: progress.clamp(0.0, 1.0),
-                    backgroundColor: AppColors.neonBlue.withOpacity(0.1),
-                    valueColor: const AlwaysStoppedAnimation<Color>(AppColors.neonBlue),
-                    minHeight: 8,
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(4),
+                    child: LinearProgressIndicator(
+                      value: progress.clamp(0.0, 1.0),
+                      backgroundColor: AppColors.neonBlue.withOpacity(0.1),
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppColors.neonBlue),
+                      minHeight: 8,
+                    ),
                   ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  '$_hydrationGlasses of $_hydrationGoal glasses',
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
+                  const SizedBox(height: 4),
+                  Text(
+                    '$_hydrationGlasses of $_hydrationGoal glasses',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.textSecondary,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
-          const SizedBox(width: 12),
-          GestureDetector(
-            onTap: _addWater,
-            child: Container(
+            const SizedBox(width: 12),
+            Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
                 color: AppColors.neonBlue.withOpacity(0.15),
                 borderRadius: BorderRadius.circular(12),
               ),
-              child: const Icon(Icons.add, color: AppColors.neonBlue),
+              child: const Icon(Icons.arrow_forward_ios, color: AppColors.neonBlue, size: 16),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -2348,7 +2510,7 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
   Widget _buildAddMealCard(BuildContext context) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onTap: () => Navigator.pushNamed(context, AppRoutes.foodScanner),
+      onTap: () => Navigator.pushNamed(context, AppRoutes.foodScanner).then((_) => _loadNutritionData()),
       child: Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -2364,7 +2526,7 @@ class _MyNutritionTabState extends ConsumerState<_MyNutritionTab> {
             Icon(Icons.add_circle_outline, color: AppColors.textSecondary.withOpacity(0.6)),
             const SizedBox(width: 8),
             Text(
-              'Add Dinner',
+              'Log Meal',
               style: TextStyle(
                 fontSize: 14,
                 color: AppColors.textSecondary.withOpacity(0.6),

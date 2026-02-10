@@ -29,6 +29,7 @@ class NotificationType(str, Enum):
     MEDICATION_REMINDER = "medication_reminder"
     HYDRATION_REMINDER = "hydration_reminder"
     EXERCISE_REMINDER = "exercise_reminder"
+    MEAL_SKIPPED = "meal_skipped"
     
     # General (low priority)
     DAILY_SUMMARY = "daily_summary"
